@@ -15,6 +15,10 @@ use crate::state::{
 /// Shared between the cursor-tracking pre-show helper and the post-show closure.
 const SCROLL_ZOOM_SENSITIVITY: f64 = 0.003;
 
+/// Minimum visible time window allowed during zooming.
+/// This is intentionally very small so users can zoom in as far as needed.
+const MIN_ZOOM_WINDOW_SECONDS: f64 = 1e-6;
+
 impl UltraLogApp {
     /// Render the main chart with cached downsampled data
     pub fn render_chart(&mut self, ui: &mut egui::Ui) {
@@ -55,7 +59,7 @@ impl UltraLogApp {
             return;
         };
         let zoom_delta = ui.input(|i| i.zoom_delta()) as f64;
-        let mut new_window = self.current_view_window;
+        let mut new_window = self.get_current_view_window();
         if zoom_delta != 1.0 {
             new_window /= zoom_delta;
         }
@@ -66,8 +70,8 @@ impl UltraLogApp {
                 new_window *= factor;
             }
         }
-        let max_window = (max_t - min_t).max(0.1);
-        self.current_view_window = new_window.clamp(0.1, max_window);
+        let max_window = (max_t - min_t).max(MIN_ZOOM_WINDOW_SECONDS);
+        self.set_current_view_window(new_window.clamp(MIN_ZOOM_WINDOW_SECONDS, max_window));
     }
 
     /// Render single-plot mode chart (original implementation)
@@ -91,7 +95,9 @@ impl UltraLogApp {
         // Compute downsampled + normalized data sliced to the current viewport.
         // Detail scales with zoom level: a 1% viewport gets MAX_CHART_POINTS
         // over that 1%, not over the whole log.
-        let viewport = self.chart_last_x_bounds.get(&0).copied();
+        let viewport = self
+            .active_tab
+            .and_then(|tab_idx| self.chart_last_x_bounds.get(&(tab_idx, 0)).copied());
         let chart_points: Vec<Option<Vec<[f64; 2]>>> = selected_channels
             .iter()
             .map(|selected| {
@@ -99,51 +105,19 @@ impl UltraLogApp {
             })
             .collect();
 
-        // Pre-compute legend names with current values at cursor position
         let use_normalization = self.field_normalization;
         let custom_mappings = &self.custom_normalizations;
-        let legend_names: Vec<String> = selected_channels
-            .iter()
-            .map(|selected| {
-                let original_name = selected.channel.name();
-                let base_name = if use_normalization {
-                    normalize_channel_name_with_custom(&original_name, Some(custom_mappings))
-                } else {
-                    original_name
-                };
-                if let Some(record) = self.get_cursor_record() {
-                    if let Some(value) = self.get_value_at_record(
-                        selected.file_index,
-                        selected.channel_index,
-                        record,
-                    ) {
-                        let source_unit = selected.channel.unit();
-                        let (converted_value, display_unit) =
-                            self.unit_preferences.convert_value(value, source_unit);
-                        if display_unit.is_empty() {
-                            format!("{}: {:.2}", base_name, converted_value)
-                        } else {
-                            format!("{}: {:.2} {}", base_name, converted_value, display_unit)
-                        }
-                    } else {
-                        base_name
-                    }
-                } else {
-                    base_name
-                }
-            })
-            .collect();
 
         // Prepare data for the plot closure (can't borrow self mutably inside)
         let chart_points = &chart_points;
         let files = &self.files;
-        // selected_channels already defined at top of function from get_selected_channels()
         let cursor_time = self.get_cursor_time();
         let cursor_tracking = self.cursor_tracking;
-        let view_window = self.current_view_window;
+        let view_window = self.get_current_view_window();
         let time_range = self.get_time_range();
         let color_blind_mode = self.color_blind_mode;
         let chart_interacted = self.get_chart_interacted();
+        let chart_panned = self.get_chart_panned();
         let initial_view_seconds = self.initial_view_seconds;
         let jump_to_time = self.get_jump_to_time();
         let scroll_to_zoom = self.scroll_to_zoom;
@@ -156,6 +130,9 @@ impl UltraLogApp {
         } else {
             0.0
         };
+
+        let zooming =
+            ui.input(|i| i.zoom_delta() != 1.0) || (scroll_to_zoom && scroll_delta_y.abs() > 0.1);
 
         // Fixed Y bounds for normalized data (0-1 with small padding)
         const Y_MIN: f64 = -0.05;
@@ -170,7 +147,7 @@ impl UltraLogApp {
             .show_grid([show_grid, show_grid])
             .grid_color(grid_color)
             .allow_zoom([true, false]) // Only allow X-axis zoom
-            .allow_drag([!cursor_tracking, false]) // Only allow X-axis drag, never Y
+            .allow_drag([self.drag_to_pan, false]) // Allow X-axis drag when enabled
             .allow_scroll([!cursor_tracking && !scroll_to_zoom, false]); // Disable scroll-pan when scroll-to-zoom enabled
 
         let response = plot.show(ui, |plot_ui| {
@@ -194,8 +171,9 @@ impl UltraLogApp {
                         x_min = (max_t - current_width).max(min_t);
                     }
                 }
-            } else if cursor_tracking {
-                // In cursor tracking mode, center on cursor
+            } else if cursor_tracking && !chart_panned && !zooming && !chart_interacted {
+                // In cursor tracking mode, center on cursor only before the user has
+                // interacted with the chart.
                 if let (Some(cursor), Some((min_t, max_t))) = (cursor_time, time_range) {
                     let half_window = view_window / 2.0;
                     x_min = (cursor - half_window).max(min_t);
@@ -205,10 +183,23 @@ impl UltraLogApp {
                 let data_width = max_t - min_t;
 
                 // If chart hasn't been interacted with yet, use initial zoomed view
-                if !chart_interacted && data_width > initial_view_seconds {
-                    // Show initial view window starting from the beginning
-                    x_min = min_t;
-                    x_max = min_t + initial_view_seconds;
+                if !chart_interacted && !zooming && data_width > initial_view_seconds {
+                    if let Some(cursor) = cursor_time {
+                        let half_window = initial_view_seconds / 2.0;
+                        x_min = (cursor - half_window).max(min_t);
+                        x_max = (cursor + half_window).min(max_t);
+                        if x_max - x_min < initial_view_seconds {
+                            if x_min == min_t {
+                                x_max = (min_t + initial_view_seconds).min(max_t);
+                            } else {
+                                x_min = (max_t - initial_view_seconds).max(min_t);
+                            }
+                        }
+                    } else {
+                        // Show initial view window starting from the beginning
+                        x_min = min_t;
+                        x_max = min_t + initial_view_seconds;
+                    }
                 } else {
                     // Clamp X bounds to data range - prevent zooming out beyond data
                     let current_width = x_max - x_min;
@@ -237,7 +228,8 @@ impl UltraLogApp {
                     let zoom_factor =
                         (1.0 - scroll_delta_y as f64 * SCROLL_ZOOM_SENSITIVITY).clamp(0.8, 1.25);
                     let width = x_max - x_min;
-                    let new_width = (width * zoom_factor).clamp(0.01, max_t - min_t);
+                    let new_width =
+                        (width * zoom_factor).clamp(MIN_ZOOM_WINDOW_SECONDS, max_t - min_t);
 
                     // Zoom around pointer position if hovering, otherwise center
                     let center = plot_ui
@@ -269,6 +261,43 @@ impl UltraLogApp {
             let new_bounds = PlotBounds::from_min_max([x_min, Y_MIN], [x_max, Y_MAX]);
             plot_ui.set_plot_bounds(new_bounds);
 
+            let hover_time = plot_ui.pointer_coordinate().map(|pos| pos.x);
+            let record = hover_time
+                .and_then(|t| self.find_record_at_time(t))
+                .or(self.get_cursor_record());
+
+            let legend_names: Vec<String> = selected_channels
+                .iter()
+                .map(|selected| {
+                    let original_name = selected.channel.name();
+                    let base_name = if use_normalization {
+                        normalize_channel_name_with_custom(&original_name, Some(custom_mappings))
+                    } else {
+                        original_name
+                    };
+                    if let Some(record) = record {
+                        if let Some(value) = self.get_value_at_record(
+                            selected.file_index,
+                            selected.channel_index,
+                            record,
+                        ) {
+                            let source_unit = selected.channel.unit();
+                            let (converted_value, display_unit) =
+                                self.unit_preferences.convert_value(value, source_unit);
+                            if display_unit.is_empty() {
+                                format!("{}: {:.2}", base_name, converted_value)
+                            } else {
+                                format!("{}: {:.2} {}", base_name, converted_value, display_unit)
+                            }
+                        } else {
+                            base_name
+                        }
+                    } else {
+                        base_name
+                    }
+                })
+                .collect();
+
             // Draw channel data lines with values in legend
             for (i, selected) in selected_channels.iter().enumerate() {
                 if selected.file_index >= files.len() {
@@ -284,7 +313,6 @@ impl UltraLogApp {
                     };
                     let color = palette[selected.color_index % palette.len()];
 
-                    // Use legend name with value if available
                     let name = &legend_names[i];
 
                     plot_ui.line(
@@ -311,18 +339,24 @@ impl UltraLogApp {
         // Remember the X-axis bounds we just rendered so the next frame can
         // slice raw data to this viewport before LTTB-downsampling.
         let final_bounds = response.transform.bounds();
-        self.chart_last_x_bounds
-            .insert(0, (final_bounds.min()[0], final_bounds.max()[0]));
+        if let Some(tab_idx) = self.active_tab {
+            self.chart_last_x_bounds
+                .insert((tab_idx, 0), (final_bounds.min()[0], final_bounds.max()[0]));
+        }
 
         // Detect user interaction with chart (drag, zoom, scroll)
         // This marks the chart as "interacted" so we stop using the initial zoomed view
-        if response.response.dragged()
-            || response.response.drag_started()
-            || ui.input(|i| i.zoom_delta() != 1.0)
+        let zooming = ui.input(|i| i.zoom_delta() != 1.0)
             || ui.input(|i| i.smooth_scroll_delta.x != 0.0)
-            || (scroll_to_zoom && scroll_delta_y.abs() > 0.1)
-        {
+            || (scroll_to_zoom && scroll_delta_y.abs() > 0.1);
+
+        if response.response.dragged() || response.response.drag_started() || zooming {
             self.set_chart_interacted(true);
+        }
+        if response.response.dragged() || response.response.drag_started() {
+            self.set_chart_panned(true);
+        } else if zooming {
+            self.set_chart_panned(false);
         }
 
         // Clear jump-to-time request after it's been processed
@@ -507,7 +541,11 @@ impl UltraLogApp {
         height: f32,
     ) {
         // Compute viewport-aware downsampled + normalized points for this plot area.
-        let viewport = self.chart_last_x_bounds.get(&plot_area_id).copied();
+        let viewport = self.active_tab.and_then(|tab_idx| {
+            self.chart_last_x_bounds
+                .get(&(tab_idx, plot_area_id))
+                .copied()
+        });
         let chart_points: Vec<Option<Vec<[f64; 2]>>> = channels
             .iter()
             .map(|selected| {
@@ -515,52 +553,21 @@ impl UltraLogApp {
             })
             .collect();
 
-        // Build legend names with values
+        // Prepare data for plot
         let use_normalization = self.field_normalization;
         let custom_mappings = &self.custom_normalizations;
-        let legend_names: Vec<String> = channels
-            .iter()
-            .map(|selected| {
-                let original_name = selected.channel.name();
-                let base_name = if use_normalization {
-                    normalize_channel_name_with_custom(&original_name, Some(custom_mappings))
-                } else {
-                    original_name
-                };
-                if let Some(record) = self.get_cursor_record() {
-                    if let Some(value) = self.get_value_at_record(
-                        selected.file_index,
-                        selected.channel_index,
-                        record,
-                    ) {
-                        let source_unit = selected.channel.unit();
-                        let (converted_value, display_unit) =
-                            self.unit_preferences.convert_value(value, source_unit);
-                        if display_unit.is_empty() {
-                            format!("{}: {:.2}", base_name, converted_value)
-                        } else {
-                            format!("{}: {:.2} {}", base_name, converted_value, display_unit)
-                        }
-                    } else {
-                        base_name
-                    }
-                } else {
-                    base_name
-                }
-            })
-            .collect();
-
-        // Prepare data for plot
         let chart_points = &chart_points;
         let files = &self.files;
         let cursor_time = self.get_cursor_time();
         let cursor_tracking = self.cursor_tracking;
-        let view_window = self.current_view_window;
+        let view_window = self.get_current_view_window();
         let time_range = self.get_time_range();
         let color_blind_mode = self.color_blind_mode;
         let chart_interacted = self.get_chart_interacted();
+        let chart_panned = self.get_chart_panned();
         let initial_view_seconds = self.initial_view_seconds;
         let jump_to_time = self.get_jump_to_time();
+        let scroll_to_zoom = self.scroll_to_zoom;
 
         // Fixed Y bounds
         const Y_MIN: f64 = -0.05;
@@ -568,6 +575,14 @@ impl UltraLogApp {
 
         let show_grid = self.show_grid;
         let grid_color = grid_color_with_opacity(ui, self.grid_opacity);
+
+        let scroll_delta_y = if scroll_to_zoom && !cursor_tracking {
+            ui.input(|i| i.smooth_scroll_delta.y)
+        } else {
+            0.0
+        };
+        let zooming =
+            ui.input(|i| i.zoom_delta() != 1.0) || (scroll_to_zoom && scroll_delta_y.abs() > 0.1);
 
         // Build plot with fixed height
         let plot = Plot::new(format!("plot_{}", plot_area_id))
@@ -578,7 +593,7 @@ impl UltraLogApp {
             .show_grid([show_grid, show_grid])
             .grid_color(grid_color)
             .allow_zoom([true, false])
-            .allow_drag([!cursor_tracking, false])
+            .allow_drag([self.drag_to_pan, false])
             .allow_scroll([!cursor_tracking, false]);
 
         let response = plot.show(ui, |plot_ui| {
@@ -600,7 +615,7 @@ impl UltraLogApp {
                         x_min = (max_t - current_width).max(min_t);
                     }
                 }
-            } else if cursor_tracking {
+            } else if cursor_tracking && !chart_panned && !zooming && !chart_interacted {
                 if let (Some(cursor), Some((min_t, max_t))) = (cursor_time, time_range) {
                     let half_window = view_window / 2.0;
                     x_min = (cursor - half_window).max(min_t);
@@ -609,9 +624,22 @@ impl UltraLogApp {
             } else if let Some((min_t, max_t)) = time_range {
                 let data_width = max_t - min_t;
 
-                if !chart_interacted && data_width > initial_view_seconds {
-                    x_min = min_t;
-                    x_max = min_t + initial_view_seconds;
+                if !chart_interacted && !zooming && data_width > initial_view_seconds {
+                    if let Some(cursor) = cursor_time {
+                        let half_window = initial_view_seconds / 2.0;
+                        x_min = (cursor - half_window).max(min_t);
+                        x_max = (cursor + half_window).min(max_t);
+                        if x_max - x_min < initial_view_seconds {
+                            if x_min == min_t {
+                                x_max = (min_t + initial_view_seconds).min(max_t);
+                            } else {
+                                x_min = (max_t - initial_view_seconds).max(min_t);
+                            }
+                        }
+                    } else {
+                        x_min = min_t;
+                        x_max = min_t + initial_view_seconds;
+                    }
                 } else {
                     let current_width = x_max - x_min;
 
@@ -634,6 +662,43 @@ impl UltraLogApp {
             // Set bounds
             let new_bounds = PlotBounds::from_min_max([x_min, Y_MIN], [x_max, Y_MAX]);
             plot_ui.set_plot_bounds(new_bounds);
+
+            let hover_time = plot_ui.pointer_coordinate().map(|pos| pos.x);
+            let record = hover_time
+                .and_then(|t| self.find_record_at_time(t))
+                .or(self.get_cursor_record());
+
+            let legend_names: Vec<String> = channels
+                .iter()
+                .map(|selected| {
+                    let original_name = selected.channel.name();
+                    let base_name = if use_normalization {
+                        normalize_channel_name_with_custom(&original_name, Some(custom_mappings))
+                    } else {
+                        original_name
+                    };
+                    if let Some(record) = record {
+                        if let Some(value) = self.get_value_at_record(
+                            selected.file_index,
+                            selected.channel_index,
+                            record,
+                        ) {
+                            let source_unit = selected.channel.unit();
+                            let (converted_value, display_unit) =
+                                self.unit_preferences.convert_value(value, source_unit);
+                            if display_unit.is_empty() {
+                                format!("{}: {:.2}", base_name, converted_value)
+                            } else {
+                                format!("{}: {:.2} {}", base_name, converted_value, display_unit)
+                            }
+                        } else {
+                            base_name
+                        }
+                    } else {
+                        base_name
+                    }
+                })
+                .collect();
 
             // Draw channel lines
             for (i, selected) in channels.iter().enumerate() {
@@ -674,16 +739,23 @@ impl UltraLogApp {
         // Save the bounds we just rendered so the next frame's downsample
         // matches the visible viewport.
         let final_bounds = response.transform.bounds();
-        self.chart_last_x_bounds
-            .insert(plot_area_id, (final_bounds.min()[0], final_bounds.max()[0]));
+        if let Some(tab_idx) = self.active_tab {
+            self.chart_last_x_bounds.insert(
+                (tab_idx, plot_area_id),
+                (final_bounds.min()[0], final_bounds.max()[0]),
+            );
+        }
 
         // Detect interaction
-        if response.response.dragged()
-            || response.response.drag_started()
-            || ui.input(|i| i.zoom_delta() != 1.0)
-            || ui.input(|i| i.smooth_scroll_delta.x != 0.0)
-        {
+        let zooming =
+            ui.input(|i| i.zoom_delta() != 1.0) || ui.input(|i| i.smooth_scroll_delta.x != 0.0);
+        if response.response.dragged() || response.response.drag_started() || zooming {
             self.set_chart_interacted(true);
+        }
+        if response.response.dragged() || response.response.drag_started() {
+            self.set_chart_panned(true);
+        } else if zooming {
+            self.set_chart_panned(false);
         }
 
         // Clear jump-to-time

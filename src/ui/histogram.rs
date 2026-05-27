@@ -6,11 +6,12 @@
 
 use eframe::egui;
 use rust_i18n::t;
+use std::fs;
 
 use crate::app::UltraLogApp;
 use crate::normalize::sort_channels_by_priority;
 use crate::state::{
-    HistogramMode, PastedTable, SampleFilter, SelectedHistogramCell, TableOperation,
+    HistogramMode, PastedTable, SampleFilter, SelectedHistogramCell, SortOrder, TableOperation,
 };
 
 /// Heat map color gradient from blue (low) to red (high)
@@ -66,6 +67,35 @@ fn calculate_data_bin(value: f64, min: f64, range: f64, grid_size: usize) -> usi
     calculate_bin(normalized.clamp(0.0, 1.0), grid_size)
 }
 
+/// Calculate the bin index for a custom breakpoint list
+fn calculate_data_bin_for_breakpoints(value: f64, breakpoints: &[f64]) -> usize {
+    if breakpoints.len() < 2 {
+        return 0;
+    }
+    let bin_count = breakpoints.len() - 1;
+    let idx = breakpoints
+        .iter()
+        .position(|&boundary| value < boundary)
+        .unwrap_or(breakpoints.len());
+
+    let bin = if idx == 0 {
+        0
+    } else if idx >= breakpoints.len() {
+        bin_count - 1
+    } else {
+        idx - 1
+    };
+    bin
+}
+
+/// Apply axis sort order to a bin index
+fn apply_sort_order(index: usize, size: usize, order: SortOrder) -> usize {
+    match order {
+        SortOrder::Increasing => index,
+        SortOrder::Decreasing => size.saturating_sub(1 + index),
+    }
+}
+
 /// Truncate a string to max length with ellipsis
 fn truncate_label(s: &str, max_len: usize) -> String {
     if s.len() <= max_len {
@@ -73,6 +103,203 @@ fn truncate_label(s: &str, max_len: usize) -> String {
     } else {
         format!("{}…", &s[..max_len - 1])
     }
+}
+
+/// Format a histogram numeric value using the configured decimal precision
+fn format_histogram_value(value: f64, precision: usize) -> String {
+    format!("{:.*}", precision, value)
+}
+
+/// Parse a comma-separated list of numeric bin breakpoints.
+/// Empty or invalid input returns None, otherwise returns sorted unique breakpoints.
+fn build_equal_breakpoints(bin_count: usize, min: f64, max: f64) -> Vec<f64> {
+    if bin_count == 0 {
+        return vec![min, max];
+    }
+    let step = (max - min) / bin_count as f64;
+    (0..=bin_count).map(|i| min + i as f64 * step).collect()
+}
+
+fn normalize_breakpoints(mut values: Vec<f64>) -> Option<Vec<f64>> {
+    values.dedup();
+    if values.len() >= 2 {
+        Some(values)
+    } else {
+        None
+    }
+}
+
+fn breakpoints_to_text(values: &[f64], precision: usize) -> String {
+    values
+        .iter()
+        .map(|value| format_histogram_value(*value, precision))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn label_values_for_axis(
+    breakpoints: Option<&Vec<f64>>,
+    grid_size: usize,
+    min: f64,
+    max: f64,
+    sort_order: SortOrder,
+) -> Vec<f64> {
+    let mut values: Vec<f64> = if let Some(breakpoints) = breakpoints {
+        breakpoints.iter().take(grid_size).cloned().collect()
+    } else {
+        build_equal_breakpoints(grid_size, min, max)
+            .into_iter()
+            .take(grid_size)
+            .collect()
+    };
+
+    if let SortOrder::Decreasing = sort_order {
+        values.reverse();
+    }
+
+    values
+}
+
+/// Get the numeric value range represented by a displayed histogram bin.
+fn axis_bin_value_range(
+    display_index: usize,
+    grid_size: usize,
+    breakpoints: Option<&Vec<f64>>,
+    min: f64,
+    max: f64,
+    sort_order: SortOrder,
+) -> (f64, f64) {
+    if grid_size == 0 {
+        return (min, max);
+    }
+
+    let raw_index = match sort_order {
+        SortOrder::Increasing => display_index,
+        SortOrder::Decreasing => grid_size.saturating_sub(1 + display_index),
+    };
+
+    if let Some(breakpoints) = breakpoints {
+        if breakpoints.len() >= grid_size + 1 && raw_index < grid_size {
+            let start = breakpoints[raw_index];
+            let end = breakpoints[raw_index + 1];
+            return if start <= end {
+                (start, end)
+            } else {
+                (end, start)
+            };
+        }
+    }
+
+    let step = (max - min) / grid_size as f64;
+    let lower = min + raw_index as f64 * step;
+    let upper = lower + step;
+    if lower <= upper {
+        (lower, upper)
+    } else {
+        (upper, lower)
+    }
+}
+
+/// Map a normalized position inside a histogram axis to the displayed axis value.
+fn axis_value_from_position(
+    normalized: f32,
+    breakpoints: Option<&Vec<f64>>,
+    grid_size: usize,
+    min: f64,
+    max: f64,
+    sort_order: SortOrder,
+) -> f64 {
+    if grid_size == 0 {
+        return min;
+    }
+
+    let normalized = normalized.clamp(0.0, 1.0);
+    let raw_index = calculate_bin(normalized, grid_size);
+    let bin_fraction = (normalized * grid_size as f32) - raw_index as f32;
+    let (lower, upper) =
+        axis_bin_value_range(raw_index, grid_size, breakpoints, min, max, sort_order);
+
+    let left_edge = if sort_order == SortOrder::Increasing {
+        lower
+    } else {
+        upper
+    };
+    let right_edge = if sort_order == SortOrder::Increasing {
+        upper
+    } else {
+        lower
+    };
+
+    left_edge + bin_fraction as f64 * (right_edge - left_edge)
+}
+
+/// Parse a pasted axis label edit string into numeric values.
+/// Supports commas, whitespace, semicolons, tabs, and pipes as separators.
+fn parse_axis_label_values(text: &str) -> Vec<f64> {
+    text.split(|c: char| c == ',' || c == ';' || c == '|' || c.is_whitespace())
+        .filter_map(|token| {
+            let token = token.trim();
+            if token.is_empty() {
+                return None;
+            }
+            let cleaned = token.replace(',', "");
+            cleaned.parse::<f64>().ok()
+        })
+        .collect()
+}
+
+fn apply_axis_label_values(
+    current: &Option<Vec<f64>>,
+    edit_text: &str,
+    start_index: usize,
+    axis_len: usize,
+    min: f64,
+    max: f64,
+) -> Option<Vec<f64>> {
+    let values = parse_axis_label_values(edit_text);
+    if values.is_empty() {
+        return None;
+    }
+
+    let required_len = axis_len + 1;
+    let mut breakpoints = if let Some(ref bins) = current {
+        let mut bins = bins.clone();
+        if bins.len() < required_len {
+            let defaults = build_equal_breakpoints(axis_len, min, max);
+            bins.extend(defaults.into_iter().skip(bins.len()));
+        } else if bins.len() > required_len {
+            bins.truncate(required_len);
+        }
+        bins
+    } else {
+        build_equal_breakpoints(axis_len, min, max)
+    };
+
+    if breakpoints.len() < required_len {
+        breakpoints = build_equal_breakpoints(axis_len, min, max);
+    }
+
+    for (offset, &value) in values.iter().enumerate() {
+        let idx = start_index + offset;
+        if idx < breakpoints.len() {
+            breakpoints[idx] = value;
+        } else {
+            break;
+        }
+    }
+
+    if start_index == 0 && values.len() == axis_len && breakpoints.len() == required_len {
+        let inferred_boundary = if values.len() >= 2 {
+            let last = values[values.len() - 1];
+            let prev = values[values.len() - 2];
+            last + (last - prev)
+        } else {
+            max + (max - min) / axis_len as f64
+        };
+        breakpoints[required_len - 1] = inferred_boundary;
+    }
+
+    normalize_breakpoints(breakpoints)
 }
 
 /// Calculate relative luminance for WCAG contrast ratio
@@ -177,20 +404,43 @@ impl UltraLogApp {
         }
 
         // Get current selections
-        let config = &self.tabs[tab_idx].histogram_state.config;
-        let current_x = config.x_channel;
-        let current_y = config.y_channel;
-        let current_z = config.z_channel;
-        let current_mode = config.mode;
-        let current_grid_size = config.grid_size;
-        let current_custom_grid_cols = config.custom_grid_columns;
-        let current_custom_grid_rows = config.custom_grid_rows;
-        let current_min_hits = config.min_hits_filter;
-        let current_custom_x = config.custom_x_range;
-        let current_custom_y = config.custom_y_range;
-        let has_pasted_table = config.pasted_table.is_some();
-        let current_table_op = config.table_operation;
-        let current_show_compare = config.show_comparison_view;
+        let current_x = self.tabs[tab_idx].histogram_state.config.x_channel;
+        let current_y = self.tabs[tab_idx].histogram_state.config.y_channel;
+        let current_z = self.tabs[tab_idx].histogram_state.config.z_channel;
+        let current_mode = self.tabs[tab_idx].histogram_state.config.mode;
+        let current_grid_size = self.tabs[tab_idx].histogram_state.config.grid_size;
+        let current_custom_grid_cols = self.tabs[tab_idx]
+            .histogram_state
+            .config
+            .custom_grid_columns;
+        let current_custom_grid_rows = self.tabs[tab_idx].histogram_state.config.custom_grid_rows;
+        let current_custom_x_bins = self.tabs[tab_idx]
+            .histogram_state
+            .config
+            .custom_x_bins
+            .clone();
+        let current_custom_y_bins = self.tabs[tab_idx]
+            .histogram_state
+            .config
+            .custom_y_bins
+            .clone();
+        let current_precision = self.tabs[tab_idx].histogram_state.config.decimal_precision;
+        let current_color_by_count = self.tabs[tab_idx].histogram_state.config.color_by_count;
+        let current_min_hits = self.tabs[tab_idx].histogram_state.config.min_hits_filter;
+        let current_custom_x = self.tabs[tab_idx].histogram_state.config.custom_x_range;
+        let current_custom_y = self.tabs[tab_idx].histogram_state.config.custom_y_range;
+        let current_x_sort_order = self.tabs[tab_idx].histogram_state.config.x_sort_order;
+        let current_y_sort_order = self.tabs[tab_idx].histogram_state.config.y_sort_order;
+        let has_pasted_table = self.tabs[tab_idx]
+            .histogram_state
+            .config
+            .pasted_table
+            .is_some();
+        let current_table_op = self.tabs[tab_idx].histogram_state.config.table_operation;
+        let current_show_compare = self.tabs[tab_idx]
+            .histogram_state
+            .config
+            .show_comparison_view;
 
         // Calculate dynamic data bounds for use as defaults when unchecking Auto
         let (dynamic_x_min, dynamic_x_max) = if let Some(x_idx) = current_x {
@@ -231,13 +481,19 @@ impl UltraLogApp {
         let mut new_mode: Option<HistogramMode> = None;
         let mut new_custom_grid_cols: Option<usize> = None;
         let mut new_custom_grid_rows: Option<usize> = None;
+        let mut new_precision: Option<usize> = None;
+        let mut new_color_by_count: Option<bool> = None;
         let mut new_min_hits: Option<u32> = None;
         let mut new_custom_x: Option<Option<(f64, f64)>> = None;
         let mut new_custom_y: Option<Option<(f64, f64)>> = None;
+        let mut new_x_sort_order: Option<SortOrder> = None;
+        let mut new_y_sort_order: Option<SortOrder> = None;
         let mut new_table_op: Option<TableOperation> = None;
         let mut new_show_compare: Option<bool> = None;
         let mut clear_pasted_table = false;
         let mut do_paste = false;
+        let mut do_save_view = false;
+        let mut do_load_view = false;
         let mut sample_filter_updates: Vec<(usize, SampleFilter)> = Vec::new();
         let mut sample_filters_to_remove: Vec<usize> = Vec::new();
         let mut new_sample_filter: Option<SampleFilter> = None;
@@ -254,39 +510,37 @@ impl UltraLogApp {
 
         // X Axis
         ui.label(egui::RichText::new(t!("histogram.x_axis")).size(font_14));
-        egui::ComboBox::from_id_salt("histogram_x")
-            .selected_text(
-                current_x
-                    .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
-                    .unwrap_or("Select..."),
-            )
-            .width(ui.available_width())
-            .show_ui(ui, |ui| {
-                for (idx, name, _) in &sorted_channels {
-                    if ui.selectable_label(current_x == Some(*idx), name).clicked() {
-                        new_x = Some(*idx);
-                    }
-                }
-            });
+        super::searchable_combo_box(
+            ui,
+            "histogram_x",
+            current_x
+                .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
+                .unwrap_or("Select..."),
+            &mut self.tabs[tab_idx].histogram_state.x_search_text,
+            sorted_channels
+                .iter()
+                .map(|(idx, name, _)| (*idx, name.as_str())),
+            current_x,
+            &mut new_x,
+        );
 
         ui.add_space(8.0);
 
         // Y Axis
         ui.label(egui::RichText::new(t!("histogram.y_axis")).size(font_14));
-        egui::ComboBox::from_id_salt("histogram_y")
-            .selected_text(
-                current_y
-                    .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
-                    .unwrap_or("Select..."),
-            )
-            .width(ui.available_width())
-            .show_ui(ui, |ui| {
-                for (idx, name, _) in &sorted_channels {
-                    if ui.selectable_label(current_y == Some(*idx), name).clicked() {
-                        new_y = Some(*idx);
-                    }
-                }
-            });
+        super::searchable_combo_box(
+            ui,
+            "histogram_y",
+            current_y
+                .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
+                .unwrap_or("Select..."),
+            &mut self.tabs[tab_idx].histogram_state.y_search_text,
+            sorted_channels
+                .iter()
+                .map(|(idx, name, _)| (*idx, name.as_str())),
+            current_y,
+            &mut new_y,
+        );
 
         ui.add_space(8.0);
 
@@ -302,20 +556,19 @@ impl UltraLogApp {
                         egui::Color32::GRAY
                     }),
             );
-            egui::ComboBox::from_id_salt("histogram_z")
-                .selected_text(
-                    current_z
-                        .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
-                        .unwrap_or("Select..."),
-                )
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
-                    for (idx, name, _) in &sorted_channels {
-                        if ui.selectable_label(current_z == Some(*idx), name).clicked() {
-                            new_z = Some(*idx);
-                        }
-                    }
-                });
+            super::searchable_combo_box(
+                ui,
+                "histogram_z",
+                current_z
+                    .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
+                    .unwrap_or("Select..."),
+                &mut self.tabs[tab_idx].histogram_state.z_search_text,
+                sorted_channels
+                    .iter()
+                    .map(|(idx, name, _)| (*idx, name.as_str())),
+                current_z,
+                &mut new_z,
+            );
         });
 
         ui.add_space(16.0);
@@ -412,7 +665,9 @@ impl UltraLogApp {
 
         // Grid columns
         ui.label(egui::RichText::new("Columns (X bins)").size(font_14));
-        let effective_cols = if current_custom_grid_cols > 0 {
+        let effective_cols = if let Some(ref bins) = current_custom_x_bins {
+            bins.len().saturating_sub(1).clamp(4, 256)
+        } else if current_custom_grid_cols > 0 {
             current_custom_grid_cols
         } else {
             current_grid_size.size()
@@ -431,7 +686,9 @@ impl UltraLogApp {
 
         // Grid rows
         ui.label(egui::RichText::new("Rows (Y bins)").size(font_14));
-        let effective_rows = if current_custom_grid_rows > 0 {
+        let effective_rows = if let Some(ref bins) = current_custom_y_bins {
+            bins.len().saturating_sub(1).clamp(4, 256)
+        } else if current_custom_grid_rows > 0 {
             current_custom_grid_rows
         } else {
             current_grid_size.size()
@@ -444,6 +701,121 @@ impl UltraLogApp {
         );
         if rows_value != effective_rows as i32 {
             new_custom_grid_rows = Some(rows_value.clamp(4, 256) as usize);
+        }
+
+        ui.add_space(8.0);
+
+        // Decimal precision
+        ui.label(egui::RichText::new("Decimal Precision").size(font_14));
+        let mut precision_value = current_precision as i32;
+        ui.add(
+            egui::DragValue::new(&mut precision_value)
+                .range(0..=6)
+                .speed(1.0),
+        );
+        if precision_value != current_precision as i32 {
+            new_precision = Some(precision_value.clamp(0, 6) as usize);
+        }
+
+        ui.add_space(8.0);
+
+        // Sort order controls
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("X Sort").size(font_14));
+            egui::ComboBox::from_id_salt("histogram_x_sort")
+                .selected_text(match current_x_sort_order {
+                    SortOrder::Increasing => "Increasing",
+                    SortOrder::Decreasing => "Decreasing",
+                })
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(
+                            current_x_sort_order == SortOrder::Increasing,
+                            "Increasing",
+                        )
+                        .clicked()
+                    {
+                        new_x_sort_order = Some(SortOrder::Increasing);
+                    }
+                    if ui
+                        .selectable_label(
+                            current_x_sort_order == SortOrder::Decreasing,
+                            "Decreasing",
+                        )
+                        .clicked()
+                    {
+                        new_x_sort_order = Some(SortOrder::Decreasing);
+                    }
+                });
+            ui.add_space(12.0);
+            ui.label(egui::RichText::new("Y Sort").size(font_14));
+            egui::ComboBox::from_id_salt("histogram_y_sort")
+                .selected_text(match current_y_sort_order {
+                    SortOrder::Increasing => "Increasing",
+                    SortOrder::Decreasing => "Decreasing",
+                })
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(
+                            current_y_sort_order == SortOrder::Increasing,
+                            "Increasing",
+                        )
+                        .clicked()
+                    {
+                        new_y_sort_order = Some(SortOrder::Increasing);
+                    }
+                    if ui
+                        .selectable_label(
+                            current_y_sort_order == SortOrder::Decreasing,
+                            "Decreasing",
+                        )
+                        .clicked()
+                    {
+                        new_y_sort_order = Some(SortOrder::Decreasing);
+                    }
+                });
+        });
+
+        ui.add_space(8.0);
+
+        ui.label(
+            egui::RichText::new(
+                "Tip: double-click axis numbers on the chart to edit bin values inline.",
+            )
+            .size(12.0)
+            .color(egui::Color32::from_gray(180)),
+        );
+        ui.add_space(16.0);
+
+        ui.horizontal(|ui| {
+            let save_button = egui::Button::new(egui::RichText::new("Save View").size(font_14))
+                .fill(egui::Color32::from_rgb(45, 45, 45))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)))
+                .corner_radius(4);
+            if ui.add(save_button).clicked() {
+                do_save_view = true;
+            }
+
+            ui.add_space(6.0);
+
+            let load_button = egui::Button::new(egui::RichText::new("Load View").size(font_14))
+                .fill(egui::Color32::from_rgb(45, 45, 45))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80)))
+                .corner_radius(4);
+            if ui.add(load_button).clicked() {
+                do_load_view = true;
+            }
+        });
+
+        ui.add_space(16.0);
+
+        // Color by hit count toggle
+        let mut color_by_count = current_color_by_count;
+        if ui
+            .checkbox(&mut color_by_count, "Color by hit count")
+            .changed()
+        {
+            new_color_by_count = Some(color_by_count);
         }
 
         ui.add_space(8.0);
@@ -521,6 +893,9 @@ impl UltraLogApp {
         ui.add_space(16.0);
         ui.separator();
         ui.add_space(16.0);
+
+        // Start with a shared reference to the current config
+        let config = &self.tabs[tab_idx].histogram_state.config;
 
         // ============================================================================
         // SAMPLE FILTERS SECTION
@@ -625,16 +1000,23 @@ impl UltraLogApp {
 
             // Add filter
             ui.label(egui::RichText::new(t!("histogram.add_filter")).size(font_14));
-            egui::ComboBox::from_id_salt("add_sample_filter")
-                .selected_text(t!("histogram.filter_channel"))
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
-                    for (idx, name, _) in &sorted_channels {
-                        if ui.selectable_label(false, name).clicked() {
-                            new_sample_filter = Some(SampleFilter::new(*idx, name.clone()));
-                        }
-                    }
-                });
+            let mut add_filter_selection: Option<usize> = None;
+            super::searchable_combo_box(
+                ui,
+                "add_sample_filter",
+                t!("histogram.filter_channel"),
+                &mut self.tabs[tab_idx].histogram_state.add_filter_search_text,
+                sorted_channels
+                    .iter()
+                    .map(|(idx, name, _)| (*idx, name.as_str())),
+                None,
+                &mut add_filter_selection,
+            );
+            if let Some(selected_idx) = add_filter_selection {
+                if let Some(name) = channel_names.get(&selected_idx) {
+                    new_sample_filter = Some(SampleFilter::new(selected_idx, name.clone()));
+                }
+            }
         });
 
         ui.add_space(16.0);
@@ -850,70 +1232,95 @@ impl UltraLogApp {
                 }
             });
         }
-        let config = &mut self.tabs[tab_idx].histogram_state.config;
-        if let Some(x) = new_x {
-            config.x_channel = Some(x);
-            config.selected_cell = None; // Clear selection on axis change
-        }
-        if let Some(y) = new_y {
-            config.y_channel = Some(y);
-            config.selected_cell = None;
-        }
-        if let Some(z) = new_z {
-            config.z_channel = Some(z);
-            config.selected_cell = None;
-        }
-        if let Some(mode) = new_mode {
-            config.mode = mode;
-            config.selected_cell = None;
-        }
-        if let Some(cols) = new_custom_grid_cols {
-            config.custom_grid_columns = cols;
-            config.selected_cell = None;
-        }
-        if let Some(rows) = new_custom_grid_rows {
-            config.custom_grid_rows = rows;
-            config.selected_cell = None;
-        }
-        if let Some(min_hits) = new_min_hits {
-            config.min_hits_filter = min_hits;
-        }
-        if let Some(range) = new_custom_x {
-            config.custom_x_range = range;
-            config.selected_cell = None;
-        }
-        if let Some(range) = new_custom_y {
-            config.custom_y_range = range;
-            config.selected_cell = None;
-        }
-        if let Some(op) = new_table_op {
-            config.table_operation = op;
-        }
-        if let Some(show) = new_show_compare {
-            config.show_comparison_view = show;
-        }
-        if clear_pasted_table {
-            config.pasted_table = None;
-            config.show_comparison_view = false;
-        }
+        {
+            let config = &mut self.tabs[tab_idx].histogram_state.config;
+            if let Some(x) = new_x {
+                config.x_channel = Some(x);
+                config.selected_cell = None; // Clear selection on axis change
+            }
+            if let Some(y) = new_y {
+                config.y_channel = Some(y);
+                config.selected_cell = None;
+            }
+            if let Some(z) = new_z {
+                config.z_channel = Some(z);
+                config.selected_cell = None;
+            }
+            if let Some(mode) = new_mode {
+                config.mode = mode;
+                config.selected_cell = None;
+            }
+            if let Some(cols) = new_custom_grid_cols {
+                config.custom_grid_columns = cols;
+                config.custom_x_bins = None;
+                config.custom_x_bins_text.clear();
+                config.selected_cell = None;
+            }
+            if let Some(rows) = new_custom_grid_rows {
+                config.custom_grid_rows = rows;
+                config.custom_y_bins = None;
+                config.custom_y_bins_text.clear();
+                config.selected_cell = None;
+            }
+            if let Some(precision) = new_precision {
+                config.decimal_precision = precision;
+            }
+            if let Some(color_by_count) = new_color_by_count {
+                config.color_by_count = color_by_count;
+            }
+            if let Some(min_hits) = new_min_hits {
+                config.min_hits_filter = min_hits;
+            }
+            if let Some(range) = new_custom_x {
+                config.custom_x_range = range;
+                config.selected_cell = None;
+            }
+            if let Some(range) = new_custom_y {
+                config.custom_y_range = range;
+                config.selected_cell = None;
+            }
+            if let Some(order) = new_x_sort_order {
+                config.x_sort_order = order;
+            }
+            if let Some(order) = new_y_sort_order {
+                config.y_sort_order = order;
+            }
+            if let Some(op) = new_table_op {
+                config.table_operation = op;
+            }
+            if let Some(show) = new_show_compare {
+                config.show_comparison_view = show;
+            }
+            if clear_pasted_table {
+                config.pasted_table = None;
+                config.show_comparison_view = false;
+            }
 
-        // Apply sample filter updates
-        for (idx, updated_filter) in sample_filter_updates {
-            if idx < config.sample_filters.len() {
-                config.sample_filters[idx] = updated_filter;
+            // Apply sample filter updates
+            for (idx, updated_filter) in sample_filter_updates {
+                if idx < config.sample_filters.len() {
+                    config.sample_filters[idx] = updated_filter;
+                }
+            }
+
+            // Remove filters (in reverse order to preserve indices)
+            for idx in sample_filters_to_remove.iter().rev() {
+                if *idx < config.sample_filters.len() {
+                    config.sample_filters.remove(*idx);
+                }
+            }
+
+            // Add new filter
+            if let Some(filter) = new_sample_filter {
+                config.sample_filters.push(filter);
             }
         }
 
-        // Remove filters (in reverse order to preserve indices)
-        for idx in sample_filters_to_remove.iter().rev() {
-            if *idx < config.sample_filters.len() {
-                config.sample_filters.remove(*idx);
-            }
+        if do_save_view {
+            self.save_histogram_view(tab_idx);
         }
-
-        // Add new filter
-        if let Some(filter) = new_sample_filter {
-            config.sample_filters.push(filter);
+        if do_load_view {
+            self.load_histogram_view(tab_idx);
         }
 
         // Handle paste after all config updates are done
@@ -928,7 +1335,8 @@ impl UltraLogApp {
             return;
         };
 
-        let config = &self.tabs[tab_idx].histogram_state.config;
+        let mut config = self.tabs[tab_idx].histogram_state.config.clone();
+        let precision = config.decimal_precision;
         let file_idx = self.tabs[tab_idx].file_index;
         let mode = config.mode;
         let (grid_cols, grid_rows) = config.effective_grid_size();
@@ -1025,6 +1433,9 @@ impl UltraLogApp {
             y_max - y_min
         };
 
+        let x_breakpoints = config.custom_x_bins.clone();
+        let y_breakpoints = config.custom_y_bins.clone();
+
         // Pre-fetch filter channel data for efficiency
         let filter_data: Vec<(&SampleFilter, Vec<f64>)> = sample_filters
             .iter()
@@ -1067,8 +1478,18 @@ impl UltraLogApp {
                 continue;
             }
 
-            let x_bin = calculate_data_bin(x_data[i], x_min, x_range, grid_cols);
-            let y_bin = calculate_data_bin(y_data[i], y_min, y_range, grid_rows);
+            let raw_x_bin = if let Some(ref breakpoints) = x_breakpoints {
+                calculate_data_bin_for_breakpoints(x_data[i], breakpoints)
+            } else {
+                calculate_data_bin(x_data[i], x_min, x_range, grid_cols)
+            };
+            let raw_y_bin = if let Some(ref breakpoints) = y_breakpoints {
+                calculate_data_bin_for_breakpoints(y_data[i], breakpoints)
+            } else {
+                calculate_data_bin(y_data[i], y_min, y_range, grid_rows)
+            };
+            let x_bin = apply_sort_order(raw_x_bin, grid_cols, config.x_sort_order);
+            let y_bin = apply_sort_order(raw_y_bin, grid_rows, config.y_sort_order);
 
             hit_counts[y_bin][x_bin] += 1;
             if let Some(ref z) = z_data {
@@ -1082,8 +1503,11 @@ impl UltraLogApp {
 
         // Calculate cell values and find min/max for color scaling
         let mut cell_values = vec![vec![None::<f64>; grid_cols]; grid_rows];
+        let use_hit_count_heatmap = config.color_by_count || mode == HistogramMode::HitCount;
         let mut min_value: f64 = f64::INFINITY;
         let mut max_value: f64 = f64::NEG_INFINITY;
+        let mut min_color_value: f64 = f64::INFINITY;
+        let mut max_color_value: f64 = f64::NEG_INFINITY;
 
         for y_bin in 0..grid_rows {
             for x_bin in 0..grid_cols {
@@ -1096,15 +1520,28 @@ impl UltraLogApp {
                     cell_values[y_bin][x_bin] = Some(value);
                     min_value = min_value.min(value);
                     max_value = max_value.max(value);
+
+                    let color_value = if use_hit_count_heatmap {
+                        hits as f64
+                    } else {
+                        value
+                    };
+                    min_color_value = min_color_value.min(color_value);
+                    max_color_value = max_color_value.max(color_value);
                 }
             }
         }
 
         // Handle case where all values are the same
-        let value_range = if (max_value - min_value).abs() < f64::EPSILON {
+        let _value_range = if (max_value - min_value).abs() < f64::EPSILON {
             1.0
         } else {
             max_value - min_value
+        };
+        let color_value_range = if (max_color_value - min_color_value).abs() < f64::EPSILON {
+            1.0
+        } else {
+            max_color_value - min_color_value
         };
 
         // Comparison view: show Histogram, Pasted Table, and Result side-by-side
@@ -1180,6 +1617,7 @@ impl UltraLogApp {
                     font_13,
                     Some(&hit_counts),
                     min_hits_filter,
+                    config.decimal_precision,
                 );
 
                 Self::render_mini_heat_map(
@@ -1192,6 +1630,7 @@ impl UltraLogApp {
                     font_13,
                     None,
                     0,
+                    config.decimal_precision,
                 );
 
                 let op_symbol = match table_operation {
@@ -1210,6 +1649,7 @@ impl UltraLogApp {
                     font_13,
                     None,
                     0,
+                    config.decimal_precision,
                 );
 
                 // Render legend with comparison info
@@ -1217,10 +1657,10 @@ impl UltraLogApp {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(format!(
-                            "{}: {:.1} to {:.1}",
+                            "{}: {} to {}",
                             t!("histogram.comparison_histogram"),
-                            min_value,
-                            max_value
+                            format_histogram_value(min_value, config.decimal_precision),
+                            format_histogram_value(max_value, config.decimal_precision)
                         ))
                         .size(font_12)
                         .color(egui::Color32::WHITE),
@@ -1228,10 +1668,10 @@ impl UltraLogApp {
                     ui.add_space(16.0);
                     ui.label(
                         egui::RichText::new(format!(
-                            "{}: {:.1} to {:.1}",
+                            "{}: {} to {}",
                             t!("histogram.comparison_pasted"),
-                            pasted_min,
-                            pasted_max
+                            format_histogram_value(pasted_min, config.decimal_precision),
+                            format_histogram_value(pasted_max, config.decimal_precision)
                         ))
                         .size(font_12)
                         .color(egui::Color32::WHITE),
@@ -1239,10 +1679,10 @@ impl UltraLogApp {
                     ui.add_space(16.0);
                     ui.label(
                         egui::RichText::new(format!(
-                            "{}: {:.1} to {:.1}",
+                            "{}: {} to {}",
                             t!("histogram.comparison_result"),
-                            result_min,
-                            result_max
+                            format_histogram_value(result_min, config.decimal_precision),
+                            format_histogram_value(result_max, config.decimal_precision)
                         ))
                         .size(font_12)
                         .color(egui::Color32::WHITE),
@@ -1302,11 +1742,15 @@ impl UltraLogApp {
                 }
 
                 if let Some(value) = cell_values[y_bin][x_bin] {
-                    // Normalize to 0-1 for color scaling
-                    let normalized = if mode == HistogramMode::HitCount && max_value > 1.0 {
-                        (value.ln() / max_value.ln()).clamp(0.0, 1.0)
+                    let color_value = if use_hit_count_heatmap {
+                        hits as f64
                     } else {
-                        ((value - min_value) / value_range).clamp(0.0, 1.0)
+                        value
+                    };
+                    let normalized = if use_hit_count_heatmap && max_color_value > 1.0 {
+                        (color_value.ln() / max_color_value.ln()).clamp(0.0, 1.0)
+                    } else {
+                        ((color_value - min_color_value) / color_value_range).clamp(0.0, 1.0)
                     };
                     let color = Self::get_histogram_color(normalized);
 
@@ -1317,7 +1761,7 @@ impl UltraLogApp {
                         let text = if mode == HistogramMode::HitCount {
                             format!("{}", hit_counts[y_bin][x_bin])
                         } else {
-                            format!("{:.1}", value)
+                            format_histogram_value(value, config.decimal_precision)
                         };
 
                         // Choose text color for AAA contrast compliance
@@ -1378,18 +1822,87 @@ impl UltraLogApp {
         let text_color = egui::Color32::from_rgb(200, 200, 200);
         let axis_title_color = egui::Color32::from_rgb(255, 255, 255);
 
+        let x_label_values = label_values_for_axis(
+            x_breakpoints.as_ref(),
+            grid_cols,
+            x_min,
+            x_max,
+            config.x_sort_order,
+        );
+        let y_label_values = label_values_for_axis(
+            y_breakpoints.as_ref(),
+            grid_rows,
+            y_min,
+            y_max,
+            config.y_sort_order,
+        );
+
         // Y axis value labels
-        for i in 0..=4 {
-            let t = i as f64 / 4.0;
-            let value = y_min + t * y_range;
-            let y_pos = plot_rect.bottom() - t as f32 * plot_rect.height();
-            painter.text(
-                egui::pos2(plot_rect.left() - 8.0, y_pos),
-                egui::Align2::RIGHT_CENTER,
-                format!("{:.1}", value),
-                egui::FontId::proportional(font_10),
-                text_color,
+        for (i, value) in y_label_values.iter().enumerate() {
+            let y_pos = plot_rect.bottom() - (i as f32 + 0.5) * cell_height;
+            let label_text = format_histogram_value(*value, config.decimal_precision);
+            let label_width = (label_text.len() as f32 * font_10 * 0.55 + 16.0)
+                .min(AXIS_LABEL_MARGIN_LEFT - 10.0)
+                .max(16.0);
+            let label_height = font_10 + 8.0;
+            let label_size = egui::vec2(label_width, label_height);
+            let label_rect = egui::Rect::from_center_size(
+                egui::pos2(plot_rect.left() - 8.0 - label_size.x / 2.0, y_pos),
+                label_size,
             );
+
+            let label_id = ui.id().with(("hist_y_axis_label", i));
+            let response = ui.interact(label_rect, label_id, egui::Sense::click());
+            if response.double_clicked() {
+                config.editing_y_axis_label = Some(i);
+                config.y_axis_label_edit_text = label_text.clone();
+            }
+
+            let is_editing = config.editing_y_axis_label == Some(i);
+            if is_editing {
+                let edit_rect = label_rect.shrink(2.0);
+                let edit_response = ui.put(
+                    edit_rect,
+                    egui::TextEdit::singleline(&mut config.y_axis_label_edit_text)
+                        .font(egui::FontId::proportional(font_10))
+                        .desired_width(edit_rect.width()),
+                );
+                if !edit_response.has_focus() {
+                    edit_response.request_focus();
+                }
+                let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                if edit_response.lost_focus() && !edit_response.has_focus()
+                    || (enter_pressed && edit_response.has_focus())
+                {
+                    if let Some(new_bins) = apply_axis_label_values(
+                        &config.custom_y_bins,
+                        &config.y_axis_label_edit_text,
+                        i,
+                        grid_rows,
+                        y_min,
+                        y_max,
+                    ) {
+                        config.custom_y_bins = Some(new_bins.clone());
+                        config.custom_y_bins_text =
+                            breakpoints_to_text(&new_bins, config.decimal_precision);
+                    }
+                    config.editing_y_axis_label = None;
+                }
+            } else {
+                let bg = if response.hovered() {
+                    egui::Color32::from_rgb(75, 75, 75)
+                } else {
+                    egui::Color32::from_rgb(55, 55, 55)
+                };
+                painter.rect_filled(label_rect, 4.0, bg);
+                painter.text(
+                    label_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label_text,
+                    egui::FontId::proportional(font_10),
+                    text_color,
+                );
+            }
         }
 
         // Y axis title (wrapped vertically on word boundaries)
@@ -1457,17 +1970,69 @@ impl UltraLogApp {
         }
 
         // X axis value labels
-        for i in 0..=4 {
-            let t = i as f64 / 4.0;
-            let value = x_min + t * x_range;
-            let x_pos = plot_rect.left() + t as f32 * plot_rect.width();
-            painter.text(
-                egui::pos2(x_pos, plot_rect.bottom() + 5.0),
-                egui::Align2::CENTER_TOP,
-                format!("{:.0}", value),
-                egui::FontId::proportional(font_10),
-                text_color,
+        for (i, value) in x_label_values.iter().enumerate() {
+            let x_pos = plot_rect.left() + (i as f32 + 0.5) * cell_width;
+            let label_text = format_histogram_value(*value, config.decimal_precision);
+            let label_width = (cell_width - 2.0).max(16.0);
+            let label_height = font_10 + 8.0;
+            let label_size = egui::vec2(label_width, label_height);
+            let label_rect = egui::Rect::from_center_size(
+                egui::pos2(x_pos, plot_rect.bottom() + 8.0 + label_size.y / 2.0),
+                label_size,
             );
+
+            let label_id = ui.id().with(("hist_x_axis_label", i));
+            let response = ui.interact(label_rect, label_id, egui::Sense::click());
+            if response.double_clicked() {
+                config.editing_x_axis_label = Some(i);
+                config.x_axis_label_edit_text = label_text.clone();
+            }
+
+            let is_editing = config.editing_x_axis_label == Some(i);
+            if is_editing {
+                let edit_rect = label_rect.shrink(2.0);
+                let edit_response = ui.put(
+                    edit_rect,
+                    egui::TextEdit::singleline(&mut config.x_axis_label_edit_text)
+                        .font(egui::FontId::proportional(font_10))
+                        .desired_width(edit_rect.width()),
+                );
+                if !edit_response.has_focus() {
+                    edit_response.request_focus();
+                }
+                let enter_pressed = ui.input(|input| input.key_pressed(egui::Key::Enter));
+                if edit_response.lost_focus() && !edit_response.has_focus()
+                    || (enter_pressed && edit_response.has_focus())
+                {
+                    if let Some(new_bins) = apply_axis_label_values(
+                        &config.custom_x_bins,
+                        &config.x_axis_label_edit_text,
+                        i,
+                        grid_cols,
+                        x_min,
+                        x_max,
+                    ) {
+                        config.custom_x_bins = Some(new_bins.clone());
+                        config.custom_x_bins_text =
+                            breakpoints_to_text(&new_bins, config.decimal_precision);
+                    }
+                    config.editing_x_axis_label = None;
+                }
+            } else {
+                let bg = if response.hovered() {
+                    egui::Color32::from_rgb(75, 75, 75)
+                } else {
+                    egui::Color32::from_rgb(55, 55, 55)
+                };
+                painter.rect_filled(label_rect, 4.0, bg);
+                painter.text(
+                    label_rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    label_text,
+                    egui::FontId::proportional(font_10),
+                    text_color,
+                );
+            }
         }
 
         // X axis title (truncate long names for consistency)
@@ -1584,8 +2149,22 @@ impl UltraLogApp {
                 let rel_y = 1.0 - (pos.y - plot_rect.top()) / plot_rect.height();
 
                 if (0.0..=1.0).contains(&rel_x) && (0.0..=1.0).contains(&rel_y) {
-                    let x_val = x_min + rel_x as f64 * x_range;
-                    let y_val = y_min + rel_y as f64 * y_range;
+                    let x_val = axis_value_from_position(
+                        rel_x,
+                        x_breakpoints.as_ref(),
+                        grid_cols,
+                        x_min,
+                        x_max,
+                        config.x_sort_order,
+                    );
+                    let y_val = axis_value_from_position(
+                        rel_y,
+                        y_breakpoints.as_ref(),
+                        grid_rows,
+                        y_min,
+                        y_max,
+                        config.y_sort_order,
+                    );
 
                     let x_bin = calculate_bin(rel_x, grid_cols);
                     let y_bin = calculate_bin(rel_y, grid_rows);
@@ -1600,17 +2179,26 @@ impl UltraLogApp {
                     let tooltip_text = match mode {
                         HistogramMode::HitCount => {
                             format!(
-                                "{}: {:.1}\n{}: {:.1}\nHits: {}",
-                                x_label, x_val, y_label, y_val, hits
+                                "{}: {}\n{}: {}\nHits: {}",
+                                x_label,
+                                format_histogram_value(x_val, config.decimal_precision),
+                                y_label,
+                                format_histogram_value(y_val, config.decimal_precision),
+                                hits
                             )
                         }
                         HistogramMode::AverageZ => {
                             let avg = cell_value
-                                .map(|v| format!("{:.2}", v))
+                                .map(|v| format_histogram_value(v, config.decimal_precision))
                                 .unwrap_or("-".to_string());
                             format!(
-                                "{}: {:.1}\n{}: {:.1}\nAvg: {}\nHits: {}",
-                                x_label, x_val, y_label, y_val, avg, hits
+                                "{}: {}\n{}: {}\nAvg: {}\nHits: {}",
+                                x_label,
+                                format_histogram_value(x_val, config.decimal_precision),
+                                y_label,
+                                format_histogram_value(y_val, config.decimal_precision),
+                                avg,
+                                hits
                             )
                         }
                     };
@@ -1660,12 +2248,22 @@ impl UltraLogApp {
                         let hits = hit_counts[y_bin][x_bin];
 
                         // Calculate cell value ranges
-                        let bin_width_x = x_range / grid_cols as f64;
-                        let bin_width_y = y_range / grid_rows as f64;
-                        let cell_x_min = x_min + x_bin as f64 * bin_width_x;
-                        let cell_x_max = cell_x_min + bin_width_x;
-                        let cell_y_min = y_min + y_bin as f64 * bin_width_y;
-                        let cell_y_max = cell_y_min + bin_width_y;
+                        let (cell_x_min, cell_x_max) = axis_bin_value_range(
+                            x_bin,
+                            grid_cols,
+                            x_breakpoints.as_ref(),
+                            x_min,
+                            x_max,
+                            config.x_sort_order,
+                        );
+                        let (cell_y_min, cell_y_max) = axis_bin_value_range(
+                            y_bin,
+                            grid_rows,
+                            y_breakpoints.as_ref(),
+                            y_min,
+                            y_max,
+                            config.y_sort_order,
+                        );
 
                         // Calculate statistics
                         let mean = if hits > 0 {
@@ -1711,7 +2309,7 @@ impl UltraLogApp {
                             maximum,
                         };
 
-                        self.tabs[tab_idx].histogram_state.config.selected_cell = Some(selected);
+                        config.selected_cell = Some(selected);
                     }
                 }
             }
@@ -1719,12 +2317,30 @@ impl UltraLogApp {
 
         // Render legend with selected cell info
         ui.add_space(8.0);
-        let selected_cell = self.tabs[tab_idx]
-            .histogram_state
-            .config
-            .selected_cell
-            .as_ref();
-        self.render_histogram_legend(ui, min_value, max_value, mode, selected_cell);
+        let selected_cell = config.selected_cell.as_ref();
+        let legend_label = if use_hit_count_heatmap {
+            "Hits:"
+        } else if mode == HistogramMode::HitCount {
+            "Hits:"
+        } else {
+            "Value:"
+        };
+        let legend_min = if use_hit_count_heatmap {
+            0.0
+        } else {
+            min_value
+        };
+        self.render_histogram_legend(
+            ui,
+            legend_min,
+            max_color_value,
+            legend_label,
+            mode,
+            precision,
+            selected_cell,
+        );
+
+        self.tabs[tab_idx].histogram_state.config = config;
     }
 
     /// Get a color from the heat map gradient based on normalized value (0-1)
@@ -1755,7 +2371,9 @@ impl UltraLogApp {
         ui: &mut egui::Ui,
         min_value: f64,
         max_value: f64,
+        label: &str,
         mode: HistogramMode,
+        precision: usize,
         selected_cell: Option<&SelectedHistogramCell>,
     ) {
         let font_12 = self.scaled_font(12.0);
@@ -1771,10 +2389,6 @@ impl UltraLogApp {
                 .inner_margin(8.0)
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        let label = match mode {
-                            HistogramMode::HitCount => "Hits:",
-                            HistogramMode::AverageZ => "Value:",
-                        };
                         ui.label(
                             egui::RichText::new(label)
                                 .size(font_13)
@@ -1804,10 +2418,14 @@ impl UltraLogApp {
                         }
 
                         ui.add_space(6.0);
-                        let range_text = if mode == HistogramMode::HitCount {
+                        let range_text = if label == "Hits:" {
                             format!("0-{:.0}", max_value)
                         } else {
-                            format!("{:.1}-{:.1}", min_value, max_value)
+                            format!(
+                                "{}-{}",
+                                format_histogram_value(min_value, precision),
+                                format_histogram_value(max_value, precision),
+                            )
                         };
                         ui.label(
                             egui::RichText::new(range_text)
@@ -1858,9 +2476,11 @@ impl UltraLogApp {
                                     egui::RichText::new("Mean:").size(font_12).color(stat_color),
                                 );
                                 ui.label(
-                                    egui::RichText::new(format!("{:.2}", cell.mean))
-                                        .size(font_12)
-                                        .color(value_color),
+                                    egui::RichText::new(format_histogram_value(
+                                        cell.mean, precision,
+                                    ))
+                                    .size(font_12)
+                                    .color(value_color),
                                 );
                                 ui.add_space(8.0);
 
@@ -1868,9 +2488,12 @@ impl UltraLogApp {
                                     egui::RichText::new("Min:").size(font_12).color(stat_color),
                                 );
                                 ui.label(
-                                    egui::RichText::new(format!("{:.2}", cell.minimum))
-                                        .size(font_12)
-                                        .color(value_color),
+                                    egui::RichText::new(format_histogram_value(
+                                        cell.minimum,
+                                        precision,
+                                    ))
+                                    .size(font_12)
+                                    .color(value_color),
                                 );
                                 ui.add_space(8.0);
 
@@ -1878,17 +2501,23 @@ impl UltraLogApp {
                                     egui::RichText::new("Max:").size(font_12).color(stat_color),
                                 );
                                 ui.label(
-                                    egui::RichText::new(format!("{:.2}", cell.maximum))
-                                        .size(font_12)
-                                        .color(value_color),
+                                    egui::RichText::new(format_histogram_value(
+                                        cell.maximum,
+                                        precision,
+                                    ))
+                                    .size(font_12)
+                                    .color(value_color),
                                 );
                                 ui.add_space(8.0);
 
                                 ui.label(egui::RichText::new("σ:").size(font_12).color(stat_color));
                                 ui.label(
-                                    egui::RichText::new(format!("{:.2}", cell.std_dev))
-                                        .size(font_12)
-                                        .color(value_color),
+                                    egui::RichText::new(format_histogram_value(
+                                        cell.std_dev,
+                                        precision,
+                                    ))
+                                    .size(font_12)
+                                    .color(value_color),
                                 );
                             }
                         });
@@ -1960,11 +2589,19 @@ impl UltraLogApp {
                     let mut stats: Vec<(&str, String)> = vec![
                         (
                             "X Range",
-                            format!("{:.2} - {:.2}", cell.x_range.0, cell.x_range.1),
+                            format!(
+                                "{} - {}",
+                                format_histogram_value(cell.x_range.0, config.decimal_precision),
+                                format_histogram_value(cell.x_range.1, config.decimal_precision),
+                            ),
                         ),
                         (
                             "Y Range",
-                            format!("{:.2} - {:.2}", cell.y_range.0, cell.y_range.1),
+                            format!(
+                                "{} - {}",
+                                format_histogram_value(cell.y_range.0, config.decimal_precision),
+                                format_histogram_value(cell.y_range.1, config.decimal_precision),
+                            ),
                         ),
                         ("Hit Count", format!("{}", cell.hit_count)),
                     ];
@@ -1973,11 +2610,23 @@ impl UltraLogApp {
                     if mode == HistogramMode::AverageZ {
                         stats.extend([
                             ("Cell Weight", format!("{:.4}", cell.cell_weight)),
-                            ("Mean", format!("{:.4}", cell.mean)),
-                            ("Minimum", format!("{:.4}", cell.minimum)),
-                            ("Maximum", format!("{:.4}", cell.maximum)),
+                            (
+                                "Mean",
+                                format_histogram_value(cell.mean, config.decimal_precision),
+                            ),
+                            (
+                                "Minimum",
+                                format_histogram_value(cell.minimum, config.decimal_precision),
+                            ),
+                            (
+                                "Maximum",
+                                format_histogram_value(cell.maximum, config.decimal_precision),
+                            ),
                             ("Variance", format!("{:.4}", cell.variance)),
-                            ("Std Dev", format!("{:.4}", cell.std_dev)),
+                            (
+                                "Std Dev",
+                                format_histogram_value(cell.std_dev, config.decimal_precision),
+                            ),
                         ]);
                     }
 
@@ -2158,6 +2807,7 @@ impl UltraLogApp {
         font_size: f32,
         hit_counts: Option<&[Vec<u32>]>,
         min_hits_filter: u32,
+        precision: usize,
     ) {
         let grid_rows = values.len();
         if grid_rows == 0 {
@@ -2223,13 +2873,13 @@ impl UltraLogApp {
                 }
 
                 if let Some(value) = cell_value {
-                    let normalized = ((value - min_value) / value_range).clamp(0.0, 1.0);
+                    let normalized = ((*value - min_value) / value_range).clamp(0.0, 1.0);
                     let color = Self::get_histogram_color(normalized);
                     painter.rect_filled(cell_rect, 0.0, color);
 
                     // Draw value text if cell is large enough
                     if cell_width > 20.0 && cell_height > 14.0 {
-                        let text = format!("{:.1}", value);
+                        let text = format_histogram_value(*value, precision);
                         let text_color = get_aaa_text_color(color);
                         let max_dim = grid_cols.max(grid_rows);
                         let text_size = if max_dim <= 16 { 9.0 } else { 7.0 };
@@ -2348,7 +2998,7 @@ impl UltraLogApp {
         tsv.push('\t'); // Empty cell for Y label column
         for x_bin in 0..grid_cols {
             let x_val = x_min + (x_bin as f64 + 0.5) * (x_range / grid_cols as f64);
-            tsv.push_str(&format!("{:.1}", x_val));
+            tsv.push_str(&format_histogram_value(x_val, config.decimal_precision));
             if x_bin < grid_cols - 1 {
                 tsv.push('\t');
             }
@@ -2359,7 +3009,10 @@ impl UltraLogApp {
         for y_bin in (0..grid_rows).rev() {
             // Y label
             let y_val = y_min + (y_bin as f64 + 0.5) * (y_range / grid_rows as f64);
-            tsv.push_str(&format!("{:.1}\t", y_val));
+            tsv.push_str(&format!(
+                "{}\t",
+                format_histogram_value(y_val, config.decimal_precision)
+            ));
 
             for x_bin in 0..grid_cols {
                 let value = match mode {
@@ -2373,7 +3026,12 @@ impl UltraLogApp {
                         }
                     }
                 };
-                tsv.push_str(&format!("{:.2}", value));
+                let value_str = if mode == HistogramMode::HitCount {
+                    format!("{}", hit_counts[y_bin][x_bin])
+                } else {
+                    format_histogram_value(value, config.decimal_precision)
+                };
+                tsv.push_str(&value_str);
                 if x_bin < grid_cols - 1 {
                     tsv.push('\t');
                 }
@@ -2498,7 +3156,7 @@ impl UltraLogApp {
             } else {
                 x_min + (x_bin as f64 + 0.5) * (x_range / grid_cols as f64)
             };
-            tsv.push_str(&format!("{:.1}", x_val));
+            tsv.push_str(&format_histogram_value(x_val, config.decimal_precision));
             if x_bin < grid_cols - 1 {
                 tsv.push('\t');
             }
@@ -2515,11 +3173,14 @@ impl UltraLogApp {
             } else {
                 y_min + (y_bin as f64 + 0.5) * (y_range / grid_rows as f64)
             };
-            tsv.push_str(&format!("{:.1}\t", y_val));
+            tsv.push_str(&format!(
+                "{}\t",
+                format_histogram_value(y_val, config.decimal_precision)
+            ));
 
             for (x_bin, val) in result_values[y_bin].iter().enumerate().take(grid_cols) {
                 let value = val.unwrap_or(0.0);
-                tsv.push_str(&format!("{:.2}", value));
+                tsv.push_str(&format_histogram_value(value, config.decimal_precision));
                 if x_bin < grid_cols - 1 {
                     tsv.push('\t');
                 }
@@ -2530,6 +3191,140 @@ impl UltraLogApp {
         // Copy to clipboard
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(tsv);
+        }
+    }
+
+    /// Save the current histogram view configuration to a JSON file.
+    fn commit_pending_histogram_label_edits(
+        &mut self,
+        config: &mut crate::state::HistogramConfig,
+        tab_idx: usize,
+    ) {
+        let file_idx = self.tabs[tab_idx].file_index;
+        let (x_min, x_max) = if let Some(x_idx) = config.x_channel {
+            if file_idx < self.files.len() {
+                let x_data = self.get_channel_data(file_idx, x_idx);
+                if !x_data.is_empty() {
+                    let min = x_data.iter().cloned().fold(f64::INFINITY, f64::min);
+                    let max = x_data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    (min, max)
+                } else {
+                    (0.0, 100.0)
+                }
+            } else {
+                (0.0, 100.0)
+            }
+        } else {
+            (0.0, 100.0)
+        };
+        let (y_min, y_max) = if let Some(y_idx) = config.y_channel {
+            if file_idx < self.files.len() {
+                let y_data = self.get_channel_data(file_idx, y_idx);
+                if !y_data.is_empty() {
+                    let min = y_data.iter().cloned().fold(f64::INFINITY, f64::min);
+                    let max = y_data.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+                    (min, max)
+                } else {
+                    (0.0, 100.0)
+                }
+            } else {
+                (0.0, 100.0)
+            }
+        } else {
+            (0.0, 100.0)
+        };
+
+        let (grid_cols, grid_rows) = config.effective_grid_size();
+
+        if let Some(label_index) = config.editing_x_axis_label {
+            if let Some(new_bins) = apply_axis_label_values(
+                &config.custom_x_bins,
+                &config.x_axis_label_edit_text,
+                label_index,
+                grid_cols,
+                x_min,
+                x_max,
+            ) {
+                config.custom_x_bins = Some(new_bins.clone());
+                config.custom_x_bins_text =
+                    breakpoints_to_text(&new_bins, config.decimal_precision);
+            }
+            config.editing_x_axis_label = None;
+        }
+
+        if let Some(label_index) = config.editing_y_axis_label {
+            if let Some(new_bins) = apply_axis_label_values(
+                &config.custom_y_bins,
+                &config.y_axis_label_edit_text,
+                label_index,
+                grid_rows,
+                y_min,
+                y_max,
+            ) {
+                config.custom_y_bins = Some(new_bins.clone());
+                config.custom_y_bins_text =
+                    breakpoints_to_text(&new_bins, config.decimal_precision);
+            }
+            config.editing_y_axis_label = None;
+        }
+    }
+
+    fn save_histogram_view(&mut self, tab_idx: usize) {
+        let mut config = self.tabs[tab_idx].histogram_state.config.clone();
+        self.commit_pending_histogram_label_edits(&mut config, tab_idx);
+        self.tabs[tab_idx].histogram_state.config = config.clone();
+
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Histogram View", &["json"])
+            .set_file_name("histogram_view.json")
+            .save_file()
+        else {
+            return;
+        };
+
+        match serde_json::to_string_pretty(&config) {
+            Ok(contents) => {
+                if let Err(e) = fs::write(&path, contents) {
+                    self.show_toast_error(&t!("toast.save_failed", error = e.to_string()));
+                } else {
+                    self.show_toast_success(&t!("toast.save_success"));
+                }
+            }
+            Err(e) => {
+                self.show_toast_error(&t!("toast.save_failed", error = e.to_string()));
+            }
+        }
+    }
+
+    /// Load a histogram view configuration from a JSON file.
+    fn load_histogram_view(&mut self, tab_idx: usize) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Histogram View", &["json"])
+            .pick_file()
+        else {
+            return;
+        };
+
+        match fs::read_to_string(&path) {
+            Ok(contents) => {
+                match serde_json::from_str::<crate::state::HistogramConfig>(&contents) {
+                    Ok(mut loaded_config) => {
+                        loaded_config.selected_cell = None;
+                        loaded_config.editing_x_axis_label = None;
+                        loaded_config.editing_y_axis_label = None;
+                        loaded_config.x_axis_label_edit_text.clear();
+                        loaded_config.y_axis_label_edit_text.clear();
+                        self.tabs[tab_idx].histogram_state.config = loaded_config;
+                        self.show_toast_success(&t!("toast.load_success"));
+                    }
+                    Err(e) => {
+                        self.show_toast_error(&t!("toast.load_failed", error = e.to_string()));
+                    }
+                }
+            }
+            Err(e) => {
+                self.show_toast_error(&t!("toast.load_failed", error = e.to_string()));
+            }
         }
     }
 
@@ -2613,5 +3408,71 @@ impl UltraLogApp {
             .histogram_state
             .config
             .show_comparison_view = true;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_axis_label_values_accepts_comma_and_space_separated_numbers() {
+        let values = parse_axis_label_values("0.00, 0.25 0.35\t0.40;0.45|0.50");
+        assert_eq!(values, vec![0.00, 0.25, 0.35, 0.40, 0.45, 0.50]);
+    }
+
+    #[test]
+    fn apply_axis_label_values_updates_sequential_breakpoints() {
+        let current = None;
+        let result = apply_axis_label_values(&current, "0.00,0.25,0.35", 0, 4, 0.0, 1.0);
+        assert!(result.is_some());
+        let bins = result.unwrap();
+        assert_eq!(bins[0], 0.00);
+        assert_eq!(bins[1], 0.25);
+        assert_eq!(bins[2], 0.35);
+        assert_eq!(bins.len(), 5);
+    }
+
+    #[test]
+    fn apply_axis_label_values_preserves_expected_bins_when_pasting_many_values() {
+        let current = None;
+        let text = "0.00\t0.25\t0.35\t0.40\t0.45\t0.50\t0.55\t0.60\t0.65\t0.70\t0.75\t0.80\t0.85\t0.90\t1.00\t1.25";
+        let result = apply_axis_label_values(&current, text, 0, 16, 0.0, 1.25);
+        assert!(result.is_some());
+        let bins = result.unwrap();
+        assert_eq!(bins.len(), 17);
+        assert_eq!(bins[0], 0.00);
+        assert_eq!(bins[14], 1.00);
+        assert_eq!(bins[15], 1.25);
+        assert_eq!(bins[16], 1.50);
+    }
+
+    #[test]
+    fn label_values_for_axis_apply_reverse_sort_order() {
+        let breakpoints = vec![0.0, 1.0, 2.0, 3.0];
+        let values = label_values_for_axis(Some(&breakpoints), 3, 0.0, 3.0, SortOrder::Decreasing);
+        assert_eq!(values, vec![2.0, 1.0, 0.0]);
+    }
+
+    #[test]
+    fn axis_bin_value_range_reverses_for_decreasing_sort_order() {
+        let breakpoints = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+
+        let bottom_range =
+            axis_bin_value_range(0, 4, Some(&breakpoints), 0.0, 4.0, SortOrder::Decreasing);
+        assert_eq!(bottom_range, (3.0, 4.0));
+
+        let top_range =
+            axis_bin_value_range(3, 4, Some(&breakpoints), 0.0, 4.0, SortOrder::Decreasing);
+        assert_eq!(top_range, (0.0, 1.0));
+    }
+
+    #[test]
+    fn axis_value_from_position_flips_values_for_descending_axes() {
+        let left_value = axis_value_from_position(0.0, None, 4, 0.0, 4.0, SortOrder::Decreasing);
+        assert_eq!(left_value, 4.0);
+
+        let right_value = axis_value_from_position(1.0, None, 4, 0.0, 4.0, SortOrder::Decreasing);
+        assert_eq!(right_value, 0.0);
     }
 }

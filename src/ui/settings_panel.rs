@@ -162,7 +162,7 @@ impl UltraLogApp {
                     );
                 });
                 if window_resp.is_some_and(|r| r.changed()) {
-                    self.current_view_window = self.view_window_seconds;
+                    self.set_current_view_window(self.view_window_seconds);
                 }
             }
 
@@ -181,6 +181,26 @@ impl UltraLogApp {
             );
             if self.scroll_to_zoom != old_scroll_to_zoom {
                 self.user_settings.scroll_to_zoom = self.scroll_to_zoom;
+                if let Err(e) = self.user_settings.save() {
+                    self.show_toast_error(&t!("toast.failed_to_save", error = e));
+                }
+            }
+
+            ui.add_space(8.0);
+
+            // Drag to pan
+            let old_drag_to_pan = self.drag_to_pan;
+            ui.checkbox(
+                &mut self.drag_to_pan,
+                egui::RichText::new(t!("settings.drag_to_pan")).size(font_14),
+            );
+            ui.label(
+                egui::RichText::new(t!("settings.drag_to_pan_desc"))
+                    .size(font_12)
+                    .color(egui::Color32::GRAY),
+            );
+            if self.drag_to_pan != old_drag_to_pan {
+                self.user_settings.drag_to_pan = self.drag_to_pan;
                 if let Err(e) = self.user_settings.save() {
                     self.show_toast_error(&t!("toast.failed_to_save", error = e));
                 }

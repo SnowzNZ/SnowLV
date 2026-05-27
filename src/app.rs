@@ -56,8 +56,8 @@ pub struct UltraLogApp {
     /// Last X-axis bounds shown by each plot area. Used to slice raw data to
     /// the visible viewport before LTTB-downsampling, so chart detail scales
     /// with zoom level instead of being fixed at MAX_CHART_POINTS over the
-    /// full log range. Keyed by plot_area_id (0 in single-plot mode).
-    pub(crate) chart_last_x_bounds: HashMap<usize, (f64, f64)>,
+    /// full log range. Keyed by (tab_idx, plot_area_id).
+    pub(crate) chart_last_x_bounds: HashMap<(usize, usize), (f64, f64)>,
     /// Current cursor position in seconds (timeline feature)
     pub(crate) cursor_time: Option<f64>,
     /// Total time range across all loaded files (min, max)
@@ -93,6 +93,8 @@ pub struct UltraLogApp {
     pub(crate) initial_view_seconds: f64,
     /// When true, scroll wheel zooms chart directly instead of panning
     pub(crate) scroll_to_zoom: bool,
+    /// When true, drag on the chart pans the visible time window
+    pub(crate) drag_to_pan: bool,
     /// When true, draw the chart background grid
     pub(crate) show_grid: bool,
     /// Grid line opacity (0..=255) used as the alpha of the base grid color
@@ -202,6 +204,7 @@ impl Default for UltraLogApp {
             field_normalization: true, // Enabled by default for better readability
             initial_view_seconds: 60.0, // Start with 60 second view
             scroll_to_zoom: false,
+            drag_to_pan: true,
             show_grid: true,
             grid_opacity: 255,
             unit_preferences: UnitPreferences::default(),
@@ -285,6 +288,7 @@ impl UltraLogApp {
             user_settings: user_settings.clone(),
             language: user_settings.language,
             scroll_to_zoom: user_settings.scroll_to_zoom,
+            drag_to_pan: user_settings.drag_to_pan,
             show_grid: user_settings.show_grid,
             grid_opacity: user_settings.grid_opacity,
             ..Self::default()
@@ -680,6 +684,7 @@ impl UltraLogApp {
                         // Create a new tab for this file with its time range
                         let mut tab = Tab::new(file_index, file_name);
                         tab.time_range = file_time_range;
+                        tab.current_view_window = self.current_view_window;
                         // Initialize cursor to start of file
                         if let Some((min_time, _)) = file_time_range {
                             tab.cursor_time = Some(min_time);
@@ -1405,7 +1410,8 @@ impl UltraLogApp {
         } else {
             // Create a new tab for this file
             let file_name = self.files[file_index].name.clone();
-            let tab = Tab::new(file_index, file_name);
+            let mut tab = Tab::new(file_index, file_name);
+            tab.current_view_window = self.current_view_window;
             self.tabs.push(tab);
             self.active_tab = Some(self.tabs.len() - 1);
             self.selected_file = Some(file_index);
@@ -1485,6 +1491,35 @@ impl UltraLogApp {
         if let Some(tab_idx) = self.active_tab {
             self.tabs[tab_idx].chart_interacted = interacted;
         }
+    }
+
+    /// Get whether the user manually panned the active tab chart
+    pub fn get_chart_panned(&self) -> bool {
+        self.active_tab
+            .map(|idx| self.tabs[idx].chart_panned)
+            .unwrap_or(false)
+    }
+
+    /// Set the manual pan state for the active tab chart
+    pub fn set_chart_panned(&mut self, panned: bool) {
+        if let Some(tab_idx) = self.active_tab {
+            self.tabs[tab_idx].chart_panned = panned;
+        }
+    }
+
+    /// Get the current view window for the active tab
+    pub fn get_current_view_window(&self) -> f64 {
+        self.active_tab
+            .map(|idx| self.tabs[idx].current_view_window)
+            .unwrap_or(self.current_view_window)
+    }
+
+    /// Set the current view window for the active tab
+    pub fn set_current_view_window(&mut self, window: f64) {
+        if let Some(tab_idx) = self.active_tab {
+            self.tabs[tab_idx].current_view_window = window;
+        }
+        self.current_view_window = window;
     }
 
     /// Get the pending jump-to-time request for the active tab
@@ -1854,6 +1889,21 @@ impl UltraLogApp {
             // ⌘, - Open Settings panel
             if cmd && i.key_pressed(egui::Key::Comma) {
                 self.active_panel = crate::state::ActivePanel::Settings;
+                return;
+            }
+
+            // Ctrl+Tab / Ctrl+Shift+Tab - Switch between open log tabs
+            if cmd && i.key_pressed(egui::Key::Tab) {
+                if !self.tabs.is_empty() {
+                    let current_tab = self.active_tab.unwrap_or(0).min(self.tabs.len() - 1);
+                    let next_tab = if shift {
+                        (current_tab + self.tabs.len() - 1) % self.tabs.len()
+                    } else {
+                        (current_tab + 1) % self.tabs.len()
+                    };
+                    self.active_tab = Some(next_tab);
+                    self.selected_file = Some(self.tabs[next_tab].file_index);
+                }
                 return;
             }
 

@@ -261,7 +261,7 @@ impl UltraLogApp {
                                     .logarithmic(true),
                             );
                             if resp.changed() {
-                                self.current_view_window = self.view_window_seconds;
+                                self.set_current_view_window(self.view_window_seconds);
                             }
                         }
 

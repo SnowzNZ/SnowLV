@@ -62,6 +62,8 @@ settings:
   window: "Window:"
   scroll_to_zoom: "Scroll to Zoom"
   scroll_to_zoom_desc: "Scroll wheel zooms the chart directly instead of panning"
+  drag_to_pan: "Drag to Pan"
+  drag_to_pan_desc: "Drag the chart to pan the visible time range left and right"
   show_grid: "Show Grid"
   show_grid_desc: "Draw the chart background grid"
   grid_opacity: "Opacity:"

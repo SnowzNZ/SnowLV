@@ -663,7 +663,11 @@ impl UltraLogApp {
             ui.label(egui::RichText::new("📊 Left Plot").size(font_15).strong());
             ui.add_space(12.0);
 
-            let left_config = &self.tabs[tab_idx].scatter_plot_state.left;
+            let left_x_channel = self.tabs[tab_idx].scatter_plot_state.left.x_channel;
+            let left_y_channel = self.tabs[tab_idx].scatter_plot_state.left.y_channel;
+            let left_state = &mut self.tabs[tab_idx].scatter_plot_state.left;
+            let left_x_search = &mut left_state.x_search_text;
+            let left_y_search = &mut left_state.y_search_text;
             let mut left_new_x = None;
             let mut left_new_y = None;
 
@@ -672,24 +676,19 @@ impl UltraLogApp {
                     .size(font_14)
                     .strong(),
             );
-            egui::ComboBox::from_id_salt("left_x_sidebar")
-                .selected_text(
-                    left_config
-                        .x_channel
-                        .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
-                        .unwrap_or("Select..."),
-                )
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
-                    for (idx, name, _) in &sorted_channels {
-                        if ui
-                            .selectable_label(left_config.x_channel == Some(*idx), name)
-                            .clicked()
-                        {
-                            left_new_x = Some(*idx);
-                        }
-                    }
-                });
+            super::searchable_combo_box(
+                ui,
+                "left_x_sidebar",
+                left_x_channel
+                    .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
+                    .unwrap_or("Select..."),
+                left_x_search,
+                sorted_channels
+                    .iter()
+                    .map(|(idx, name, _)| (*idx, name.as_str())),
+                left_x_channel,
+                &mut left_new_x,
+            );
 
             ui.add_space(8.0);
 
@@ -699,24 +698,19 @@ impl UltraLogApp {
                     .size(font_14)
                     .strong(),
             );
-            egui::ComboBox::from_id_salt("left_y_sidebar")
-                .selected_text(
-                    left_config
-                        .y_channel
-                        .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
-                        .unwrap_or("Select..."),
-                )
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
-                    for (idx, name, _) in &sorted_channels {
-                        if ui
-                            .selectable_label(left_config.y_channel == Some(*idx), name)
-                            .clicked()
-                        {
-                            left_new_y = Some(*idx);
-                        }
-                    }
-                });
+            super::searchable_combo_box(
+                ui,
+                "left_y_sidebar",
+                left_y_channel
+                    .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
+                    .unwrap_or("Select..."),
+                left_y_search,
+                sorted_channels
+                    .iter()
+                    .map(|(idx, name, _)| (*idx, name.as_str())),
+                left_y_channel,
+                &mut left_new_y,
+            );
 
             ui.add_space(12.0);
 
@@ -760,7 +754,11 @@ impl UltraLogApp {
             ui.label(egui::RichText::new("📊 Right Plot").size(font_15).strong());
             ui.add_space(12.0);
 
-            let right_config = &self.tabs[tab_idx].scatter_plot_state.right;
+            let right_x_channel = self.tabs[tab_idx].scatter_plot_state.right.x_channel;
+            let right_y_channel = self.tabs[tab_idx].scatter_plot_state.right.y_channel;
+            let right_state = &mut self.tabs[tab_idx].scatter_plot_state.right;
+            let right_x_search = &mut right_state.x_search_text;
+            let right_y_search = &mut right_state.y_search_text;
             let mut right_new_x = None;
             let mut right_new_y = None;
 
@@ -769,24 +767,19 @@ impl UltraLogApp {
                     .size(font_14)
                     .strong(),
             );
-            egui::ComboBox::from_id_salt("right_x_sidebar")
-                .selected_text(
-                    right_config
-                        .x_channel
-                        .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
-                        .unwrap_or("Select..."),
-                )
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
-                    for (idx, name, _) in &sorted_channels {
-                        if ui
-                            .selectable_label(right_config.x_channel == Some(*idx), name)
-                            .clicked()
-                        {
-                            right_new_x = Some(*idx);
-                        }
-                    }
-                });
+            super::searchable_combo_box(
+                ui,
+                "right_x_sidebar",
+                right_x_channel
+                    .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
+                    .unwrap_or("Select..."),
+                right_x_search,
+                sorted_channels
+                    .iter()
+                    .map(|(idx, name, _)| (*idx, name.as_str())),
+                right_x_channel,
+                &mut right_new_x,
+            );
 
             ui.add_space(8.0);
 
@@ -796,24 +789,19 @@ impl UltraLogApp {
                     .size(font_14)
                     .strong(),
             );
-            egui::ComboBox::from_id_salt("right_y_sidebar")
-                .selected_text(
-                    right_config
-                        .y_channel
-                        .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
-                        .unwrap_or("Select..."),
-                )
-                .width(ui.available_width())
-                .show_ui(ui, |ui| {
-                    for (idx, name, _) in &sorted_channels {
-                        if ui
-                            .selectable_label(right_config.y_channel == Some(*idx), name)
-                            .clicked()
-                        {
-                            right_new_y = Some(*idx);
-                        }
-                    }
-                });
+            super::searchable_combo_box(
+                ui,
+                "right_y_sidebar",
+                right_y_channel
+                    .and_then(|i| channel_names.get(&i).map(|n| n.as_str()))
+                    .unwrap_or("Select..."),
+                right_y_search,
+                sorted_channels
+                    .iter()
+                    .map(|(idx, name, _)| (*idx, name.as_str())),
+                right_y_channel,
+                &mut right_new_y,
+            );
 
             ui.add_space(12.0);
 

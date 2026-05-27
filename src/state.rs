@@ -3,6 +3,7 @@
 //! This module contains the fundamental data structures used throughout
 //! the application, including loaded files, selected channels, and color palettes.
 
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
@@ -317,6 +318,10 @@ pub struct ScatterPlotConfig {
     pub y_channel: Option<usize>,
     /// Channel index for Z axis (color coding)
     pub z_channel: Option<usize>,
+    /// Search text for the X axis dropdown
+    pub x_search_text: String,
+    /// Search text for the Y axis dropdown
+    pub y_search_text: String,
     /// Currently selected point (persisted on click)
     pub selected_point: Option<SelectedHeatmapPoint>,
 }
@@ -335,7 +340,7 @@ pub struct ScatterPlotState {
 // ============================================================================
 
 /// Display mode for histogram cell values
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HistogramMode {
     /// Show average Z-channel value in cells
     #[default]
@@ -345,7 +350,7 @@ pub enum HistogramMode {
 }
 
 /// Grid size options for histogram
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum HistogramGridSize {
     /// 16x16 grid
     Size16,
@@ -377,7 +382,7 @@ impl HistogramGridSize {
 }
 
 /// Statistics for a selected histogram cell
-#[derive(Clone, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct SelectedHistogramCell {
     /// X bin index
     pub x_bin: usize,
@@ -404,7 +409,7 @@ pub struct SelectedHistogramCell {
 }
 
 /// Filter configuration for excluding samples based on channel value ranges
-#[derive(Clone)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct SampleFilter {
     /// Channel index to filter on
     pub channel_idx: usize,
@@ -432,7 +437,7 @@ impl SampleFilter {
 }
 
 /// Represents a pasted fuel/tune table for comparison operations
-#[derive(Clone, Default)]
+#[derive(Clone, Serialize, Deserialize, Default)]
 pub struct PastedTable {
     /// The table data (row-major, y_bin outer, x_bin inner)
     pub data: Vec<Vec<f64>>,
@@ -448,7 +453,7 @@ pub struct PastedTable {
 }
 
 /// Operation to apply between histogram and pasted table
-#[derive(Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TableOperation {
     #[default]
     Add,
@@ -485,8 +490,19 @@ impl TableOperation {
     }
 }
 
+/// Sort order for an axis
+#[derive(Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum SortOrder {
+    /// Increasing values from left-to-right or bottom-to-top
+    #[default]
+    Increasing,
+    /// Decreasing values from left-to-right or bottom-to-top
+    Decreasing,
+}
+
 /// Configuration for the histogram view
-#[derive(Clone, Default)]
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HistogramConfig {
     /// Channel index for X axis
     pub x_channel: Option<usize>,
@@ -508,8 +524,32 @@ pub struct HistogramConfig {
     pub min_hits_filter: u32,
     /// Custom X axis range. None = auto from data
     pub custom_x_range: Option<(f64, f64)>,
+    /// Custom X bin breakpoints. If set, this overrides auto bin splitting
+    pub custom_x_bins: Option<Vec<f64>>,
+    /// Text representation of the custom X bin breakpoint list
+    pub custom_x_bins_text: String,
+    /// Current edit state for a custom X axis label
+    #[serde(skip)]
+    pub editing_x_axis_label: Option<usize>,
+    /// Text input for editing the custom X axis label
+    #[serde(skip)]
+    pub x_axis_label_edit_text: String,
+    /// Sort order for X axis when not using custom bin values
+    pub x_sort_order: SortOrder,
     /// Custom Y axis range. None = auto from data
     pub custom_y_range: Option<(f64, f64)>,
+    /// Custom Y bin breakpoints. If set, this overrides auto bin splitting
+    pub custom_y_bins: Option<Vec<f64>>,
+    /// Text representation of the custom Y bin breakpoint list
+    pub custom_y_bins_text: String,
+    /// Current edit state for a custom Y axis label
+    #[serde(skip)]
+    pub editing_y_axis_label: Option<usize>,
+    /// Text input for editing the custom Y axis label
+    #[serde(skip)]
+    pub y_axis_label_edit_text: String,
+    /// Sort order for Y axis when not using custom bin values
+    pub y_sort_order: SortOrder,
     /// Sample filters - all must pass for sample to be included (AND logic)
     pub sample_filters: Vec<SampleFilter>,
     /// Pasted table for comparison operations
@@ -518,21 +558,81 @@ pub struct HistogramConfig {
     pub table_operation: TableOperation,
     /// Whether to show the side-by-side comparison view
     pub show_comparison_view: bool,
+    /// Use hit count for heatmap coloring instead of actual values
+    pub color_by_count: bool,
+    /// Number of decimal digits shown in histogram values
+    pub decimal_precision: usize,
+}
+
+impl Default for HistogramConfig {
+    fn default() -> Self {
+        Self {
+            x_channel: None,
+            y_channel: None,
+            z_channel: None,
+            mode: HistogramMode::AverageZ,
+            grid_size: HistogramGridSize::Size32,
+            custom_grid_columns: 0,
+            custom_grid_rows: 0,
+            selected_cell: None,
+            min_hits_filter: 0,
+            custom_x_range: None,
+            custom_x_bins: None,
+            custom_x_bins_text: String::new(),
+            editing_x_axis_label: None,
+            x_axis_label_edit_text: String::new(),
+            x_sort_order: SortOrder::Increasing,
+            custom_y_range: None,
+            custom_y_bins: None,
+            custom_y_bins_text: String::new(),
+            editing_y_axis_label: None,
+            y_axis_label_edit_text: String::new(),
+            y_sort_order: SortOrder::Increasing,
+            sample_filters: Vec::new(),
+            pasted_table: None,
+            table_operation: TableOperation::Add,
+            show_comparison_view: false,
+            color_by_count: false,
+            decimal_precision: 1,
+        }
+    }
 }
 
 impl HistogramConfig {
     /// Get the effective grid size as (columns, rows)
     /// Returns custom grid if set, otherwise uses the square grid_size enum for both dimensions
     pub fn effective_grid_size(&self) -> (usize, usize) {
-        if self.custom_grid_columns > 0 && self.custom_grid_rows > 0 {
-            (
-                self.custom_grid_columns.clamp(4, 256),
-                self.custom_grid_rows.clamp(4, 256),
-            )
+        let cols = if let Some(breakpoints) = self.custom_x_bins.as_ref() {
+            let count = breakpoints.len().saturating_sub(1);
+            if count >= 4 {
+                count.clamp(4, 256)
+            } else if self.custom_grid_columns > 0 {
+                self.custom_grid_columns.clamp(4, 256)
+            } else {
+                self.grid_size.size()
+            }
+        } else if self.custom_grid_columns > 0 {
+            self.custom_grid_columns.clamp(4, 256)
         } else {
-            let size = self.grid_size.size();
-            (size, size)
-        }
+            self.grid_size.size()
+        };
+
+        let rows = if let Some(breakpoints) = self.custom_y_bins.as_ref() {
+            let count = breakpoints.len().saturating_sub(1);
+            if count >= 4 {
+                count.clamp(4, 256)
+            } else if self.custom_grid_rows > 0 {
+                self.custom_grid_rows.clamp(4, 256)
+            } else {
+                self.grid_size.size()
+            }
+        } else if self.custom_grid_rows > 0 {
+            self.custom_grid_rows.clamp(4, 256)
+        } else {
+            self.grid_size.size()
+        };
+
+        (cols, rows)
     }
 }
 
@@ -541,6 +641,14 @@ impl HistogramConfig {
 pub struct HistogramState {
     /// Histogram configuration
     pub config: HistogramConfig,
+    /// Search text for the X axis dropdown
+    pub x_search_text: String,
+    /// Search text for the Y axis dropdown
+    pub y_search_text: String,
+    /// Search text for the Z axis dropdown
+    pub z_search_text: String,
+    /// Search text for the add-filter dropdown
+    pub add_filter_search_text: String,
 }
 
 // ============================================================================
@@ -606,6 +714,10 @@ pub struct Tab {
     pub cursor_record: Option<usize>,
     /// Whether user has interacted with chart zoom/pan
     pub chart_interacted: bool,
+    /// Whether the user manually panned the chart view
+    pub chart_panned: bool,
+    /// Current zoom window width for this tab in seconds
+    pub current_view_window: f64,
     /// Time range for this tab's log file (min, max)
     pub time_range: Option<(f64, f64)>,
     /// Scatter plot state for this tab (dual heatmaps)
@@ -641,6 +753,8 @@ impl Tab {
             cursor_time: None,
             cursor_record: None,
             chart_interacted: false,
+            chart_panned: false,
+            current_view_window: 30.0,
             time_range: None,
             scatter_plot_state,
             histogram_state: HistogramState::default(),

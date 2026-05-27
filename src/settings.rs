@@ -19,6 +19,9 @@ pub struct UserSettings {
     /// When true, scroll wheel zooms chart directly instead of panning
     #[serde(default)]
     pub scroll_to_zoom: bool,
+    /// When true, drag on the chart pans the visible time window
+    #[serde(default = "default_drag_to_pan")]
+    pub drag_to_pan: bool,
     /// When true, draw the chart background grid
     #[serde(default = "default_show_grid")]
     pub show_grid: bool,
@@ -36,6 +39,10 @@ fn default_show_grid() -> bool {
     true
 }
 
+fn default_drag_to_pan() -> bool {
+    true
+}
+
 fn default_grid_opacity() -> u8 {
     255
 }
@@ -46,6 +53,7 @@ impl Default for UserSettings {
             version: 1,
             language: Language::default(),
             scroll_to_zoom: false,
+            drag_to_pan: default_drag_to_pan(),
             show_grid: default_show_grid(),
             grid_opacity: default_grid_opacity(),
         }

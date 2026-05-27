@@ -37,6 +37,9 @@ pub mod side_panel;
 pub mod tool_properties_panel;
 pub mod tools_panel;
 
+use eframe::egui;
+use std::hash::Hash;
+
 // Core UI components
 pub mod analysis_panel;
 pub mod channels;
@@ -50,6 +53,53 @@ pub mod menu;
 pub mod normalization_editor;
 pub mod scatter_plot;
 pub mod sidebar;
+
+/// Searchable dropdown helper used by UI modules that need typeahead-like filtering.
+pub fn searchable_combo_box<'a, S, I>(
+    ui: &mut egui::Ui,
+    id_source: S,
+    selected_text: impl Into<String>,
+    search_query: &mut String,
+    options: I,
+    current_index: Option<usize>,
+    new_selection: &mut Option<usize>,
+) where
+    S: Hash,
+    I: IntoIterator<Item = (usize, &'a str)>,
+{
+    let selected_text = selected_text.into();
+    let combo = egui::ComboBox::from_id_salt(id_source)
+        .selected_text(selected_text)
+        .width(ui.available_width());
+    combo.show_ui(ui, |ui| {
+        let search = ui.add(
+            egui::TextEdit::singleline(search_query)
+                .hint_text("Type to filter...")
+                .desired_width(ui.available_width()),
+        );
+        if !search.has_focus() {
+            search.request_focus();
+        }
+
+        ui.separator();
+        let filter = search_query.to_lowercase();
+        let mut any_match = false;
+        for (idx, name) in options {
+            if filter.is_empty() || name.to_lowercase().contains(&filter) {
+                any_match = true;
+                if ui
+                    .selectable_label(current_index == Some(idx), name)
+                    .clicked()
+                {
+                    *new_selection = Some(idx);
+                }
+            }
+        }
+        if !any_match {
+            ui.label(egui::RichText::new("No matches").color(egui::Color32::LIGHT_RED));
+        }
+    });
+}
 pub mod tab_bar;
 pub mod timeline;
 pub mod toast;
