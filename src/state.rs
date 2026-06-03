@@ -146,6 +146,8 @@ pub struct SelectedChannel {
     pub channel: Channel,
     /// Index into the color palette for this channel's line
     pub color_index: usize,
+    /// Whether this selected channel is temporarily hidden from chart/export output
+    pub hidden: bool,
 }
 
 /// Result from background file loading operation
@@ -693,6 +695,11 @@ impl PlotArea {
     }
 }
 
+#[derive(Clone, Copy)]
+pub struct PlotChannelDragPayload {
+    pub channel_idx: usize,
+}
+
 // ============================================================================
 // Tab Types
 // ============================================================================
@@ -712,6 +719,10 @@ pub struct Tab {
     pub cursor_time: Option<f64>,
     /// Current data record index at cursor position
     pub cursor_record: Option<usize>,
+    /// When true, playback advances records using `playback_rate_hz` instead of log timestamps
+    pub playback_rate_override: bool,
+    /// Logger sample rate used for record-based playback, in Hz/FPS
+    pub playback_rate_hz: f64,
     /// Whether user has interacted with chart zoom/pan
     pub chart_interacted: bool,
     /// Whether the user manually panned the chart view
@@ -752,6 +763,8 @@ impl Tab {
             channel_search: String::new(),
             cursor_time: None,
             cursor_record: None,
+            playback_rate_override: false,
+            playback_rate_hz: 30.0,
             chart_interacted: false,
             chart_panned: false,
             current_view_window: 30.0,

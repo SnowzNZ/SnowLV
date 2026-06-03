@@ -6,8 +6,10 @@
 //! - Settings roundtrip
 //! - Config path handling
 
-use ultralog::i18n::Language;
-use ultralog::settings::UserSettings;
+use snowlv::i18n::Language;
+use snowlv::settings::UserSettings;
+use snowlv::theme::ThemeId;
+use snowlv::units::{PressureUnit, UnitPreferences, UnitPreset};
 
 // ============================================
 // Default Settings Tests
@@ -44,6 +46,24 @@ fn test_settings_default_show_grid() {
 fn test_settings_default_grid_opacity() {
     let settings = UserSettings::default();
     assert_eq!(settings.grid_opacity, 255);
+}
+
+#[test]
+fn test_settings_default_values_follow_cursor() {
+    let settings = UserSettings::default();
+    assert!(!settings.values_follow_cursor);
+}
+
+#[test]
+fn test_settings_default_discord_rpc_show_log_filename() {
+    let settings = UserSettings::default();
+    assert!(settings.discord_rpc_show_log_filename);
+}
+
+#[test]
+fn test_settings_default_unit_preferences_are_metric() {
+    let settings = UserSettings::default();
+    assert_eq!(settings.unit_preferences.preset(), UnitPreset::Metric);
 }
 
 // ============================================
@@ -126,6 +146,8 @@ fn test_settings_deserialize_legacy_without_grid_fields() {
 
     assert!(settings.show_grid);
     assert_eq!(settings.grid_opacity, 255);
+    assert!(!settings.values_follow_cursor);
+    assert!(settings.discord_rpc_show_log_filename);
 }
 
 #[test]
@@ -142,9 +164,12 @@ fn test_settings_grid_fields_roundtrip() {
     let original = UserSettings {
         version: 1,
         language: Language::English,
-        scroll_to_zoom: false,
+        theme: ThemeId::SnowLV.id().to_string(),
+        values_follow_cursor: false,
         show_grid: false,
         grid_opacity: 64,
+        discord_rpc_show_log_filename: true,
+        unit_preferences: UnitPreferences::default(),
     };
 
     let json = serde_json::to_string(&original).unwrap();
@@ -155,13 +180,39 @@ fn test_settings_grid_fields_roundtrip() {
 }
 
 #[test]
+fn test_settings_unit_preferences_roundtrip() {
+    let mut unit_preferences = UnitPreferences::imperial();
+    unit_preferences.pressure = PressureUnit::Bar;
+
+    let original = UserSettings {
+        version: 1,
+        language: Language::English,
+        theme: ThemeId::SnowLV.id().to_string(),
+        values_follow_cursor: false,
+        show_grid: true,
+        grid_opacity: 255,
+        discord_rpc_show_log_filename: true,
+        unit_preferences: unit_preferences.clone(),
+    };
+
+    let json = serde_json::to_string(&original).unwrap();
+    let restored: UserSettings = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(restored.unit_preferences, unit_preferences);
+    assert_eq!(restored.unit_preferences.preset(), UnitPreset::Custom);
+}
+
+#[test]
 fn test_settings_roundtrip() {
     let original = UserSettings {
         version: 1,
         language: Language::Spanish,
-        scroll_to_zoom: false,
+        theme: ThemeId::GruvboxDark.id().to_string(),
+        values_follow_cursor: false,
         show_grid: true,
         grid_opacity: 255,
+        discord_rpc_show_log_filename: true,
+        unit_preferences: UnitPreferences::default(),
     };
 
     let json = serde_json::to_string(&original).unwrap();
@@ -169,6 +220,7 @@ fn test_settings_roundtrip() {
 
     assert_eq!(original.version, restored.version);
     assert_eq!(original.language, restored.language);
+    assert_eq!(original.theme, restored.theme);
 }
 
 #[test]
@@ -177,9 +229,12 @@ fn test_settings_roundtrip_all_languages() {
         let settings = UserSettings {
             version: 1,
             language: *lang,
-            scroll_to_zoom: false,
+            theme: ThemeId::CatppuccinMocha.id().to_string(),
+            values_follow_cursor: false,
             show_grid: true,
             grid_opacity: 255,
+            discord_rpc_show_log_filename: true,
+            unit_preferences: UnitPreferences::default(),
         };
 
         let json = serde_json::to_string(&settings).unwrap();
@@ -233,12 +288,12 @@ fn test_settings_path_contains_settings_filename() {
 }
 
 #[test]
-fn test_config_dir_contains_ultralog() {
+fn test_config_dir_contains_snowlv() {
     if let Some(path) = UserSettings::get_config_dir() {
         let path_str = path.to_string_lossy().to_lowercase();
         assert!(
-            path_str.contains("ultralog"),
-            "Config dir should contain 'ultralog' or 'UltraLog'"
+            path_str.contains("snowlv"),
+            "Config dir should contain 'snowlv' or 'SnowLV'"
         );
     }
 }
@@ -278,15 +333,19 @@ fn test_settings_clone() {
     let original = UserSettings {
         version: 1,
         language: Language::Spanish,
-        scroll_to_zoom: false,
+        theme: ThemeId::TokyoNight.id().to_string(),
+        values_follow_cursor: false,
         show_grid: true,
         grid_opacity: 255,
+        discord_rpc_show_log_filename: true,
+        unit_preferences: UnitPreferences::default(),
     };
 
     let cloned = original.clone();
 
     assert_eq!(original.version, cloned.version);
     assert_eq!(original.language, cloned.language);
+    assert_eq!(original.theme, cloned.theme);
 }
 
 #[test]

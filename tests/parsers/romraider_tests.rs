@@ -12,8 +12,8 @@ mod common;
 
 use common::assertions::*;
 use common::float_cmp::*;
-use ultralog::parsers::romraider::RomRaider;
-use ultralog::parsers::types::Parseable;
+use snowlv::parsers::romraider::RomRaider;
+use snowlv::parsers::types::Parseable;
 
 // ============================================
 // Format Detection Tests

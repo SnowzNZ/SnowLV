@@ -1,7 +1,7 @@
-//! MCP (Model Context Protocol) server module for UltraLog
+//! MCP (Model Context Protocol) server module for SnowLV
 //!
 //! This module implements an MCP server that allows LLMs like Claude to
-//! interact with the UltraLog application, controlling channel visualization,
+//! interact with the SnowLV application, controlling channel visualization,
 //! computing derived channels, and analyzing ECU log data.
 //!
 //! The server runs as an HTTP service and Claude Desktop can connect via:
@@ -10,4 +10,4 @@
 pub mod client;
 pub mod server;
 
-pub use server::{start_mcp_server, McpServerHandle, UltraLogMcpServer, DEFAULT_MCP_PORT};
+pub use server::{start_mcp_server, McpServerHandle, SnowLVMcpServer, DEFAULT_MCP_PORT};

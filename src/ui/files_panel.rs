@@ -3,11 +3,11 @@
 use eframe::egui;
 use rust_i18n::t;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::state::{LoadingState, SUPPORTED_EXTENSIONS};
 use crate::ui::icons::draw_upload_icon;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the files panel content (called from side_panel.rs)
     pub fn render_files_panel_content(&mut self, ui: &mut egui::Ui) {
         // Show loading indicator
@@ -41,6 +41,7 @@ impl UltraLogApp {
 
     /// Render the list of loaded files
     fn render_file_list(&mut self, ui: &mut egui::Ui) {
+        let theme = self.theme();
         let mut file_to_remove: Option<usize> = None;
         let mut file_to_switch: Option<usize> = None;
 
@@ -72,15 +73,20 @@ impl UltraLogApp {
         {
             // File card with selection highlight
             let card_bg = if *is_selected {
-                egui::Color32::from_rgb(50, 55, 45) // Subtle olive tint for selected
+                theme.color(theme.selection)
             } else {
-                egui::Color32::from_rgb(40, 40, 40)
+                theme.color(theme.card)
             };
 
             let card_border = if *is_selected {
-                egui::Color32::from_rgb(113, 120, 78) // Olive green for selected
+                theme.color(theme.accent)
             } else {
-                egui::Color32::from_rgb(55, 55, 55)
+                theme.color(theme.grid)
+            };
+            let card_text = if *is_selected {
+                theme.readable_text_color(card_bg)
+            } else {
+                theme.color(theme.text)
             };
 
             egui::Frame::NONE
@@ -96,7 +102,7 @@ impl UltraLogApp {
                                 egui::RichText::new(file_name)
                                     .size(self.scaled_font(14.0))
                                     .color(if *is_selected {
-                                        egui::Color32::WHITE
+                                        card_text
                                     } else {
                                         egui::Color32::LIGHT_GRAY
                                     }),
@@ -162,7 +168,9 @@ impl UltraLogApp {
 
     /// Render the "Add File" button
     fn render_add_file_button(&mut self, ui: &mut egui::Ui) {
-        let primary_color = egui::Color32::from_rgb(113, 120, 78); // Olive green
+        let theme = self.theme();
+        let primary_color = theme.color(theme.accent);
+        let primary_text = theme.readable_text_color(primary_color);
 
         let button_response = egui::Frame::NONE
             .fill(primary_color)
@@ -172,12 +180,12 @@ impl UltraLogApp {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("+")
-                            .color(egui::Color32::WHITE)
+                            .color(primary_text)
                             .size(self.scaled_font(16.0)),
                     );
                     ui.label(
                         egui::RichText::new(t!("files.add_file"))
-                            .color(egui::Color32::WHITE)
+                            .color(primary_text)
                             .size(self.scaled_font(14.0)),
                     );
                 });
@@ -203,9 +211,11 @@ impl UltraLogApp {
 
     /// Render the drop zone card for when no files are loaded
     fn render_drop_zone_card(&mut self, ui: &mut egui::Ui) {
-        let primary_color = egui::Color32::from_rgb(113, 120, 78); // Olive green
-        let card_bg = egui::Color32::from_rgb(45, 45, 45);
-        let text_gray = egui::Color32::from_rgb(150, 150, 150);
+        let theme = self.theme();
+        let primary_color = theme.color(theme.accent);
+        let primary_text = theme.readable_text_color(primary_color);
+        let card_bg = theme.color(theme.card);
+        let text_gray = theme.color(theme.muted_text);
 
         ui.add_space(20.0);
 
@@ -234,7 +244,7 @@ impl UltraLogApp {
                         .show(ui, |ui| {
                             ui.label(
                                 egui::RichText::new(t!("files.select_file"))
-                                    .color(egui::Color32::WHITE)
+                                    .color(primary_text)
                                     .size(self.scaled_font(14.0)),
                             );
                         });

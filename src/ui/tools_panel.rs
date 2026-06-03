@@ -4,10 +4,10 @@
 
 use eframe::egui;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::state::ActiveTool;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the tools panel content (called from side_panel.rs)
     pub fn render_tools_panel_content(&mut self, ui: &mut egui::Ui) {
         let _font_12 = self.scaled_font(12.0);
@@ -33,6 +33,7 @@ impl UltraLogApp {
 
     /// Render the analysis tools section
     fn render_tools_analysis_section(&mut self, ui: &mut egui::Ui) {
+        let theme = self.theme();
         let font_12 = self.scaled_font(12.0);
         let font_14 = self.scaled_font(14.0);
 
@@ -63,7 +64,8 @@ impl UltraLogApp {
                 ui.add_space(4.0);
 
                 // Open full analysis panel button
-                let primary_color = egui::Color32::from_rgb(113, 120, 78);
+                let primary_color = theme.color(theme.accent);
+                let primary_text = theme.readable_text_color(primary_color);
                 let btn = egui::Frame::NONE
                     .fill(primary_color)
                     .corner_radius(4)
@@ -71,7 +73,7 @@ impl UltraLogApp {
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new("Open Analysis Panel")
-                                .color(egui::Color32::WHITE)
+                                .color(primary_text)
                                 .size(font_14),
                         );
                     });
@@ -95,7 +97,7 @@ impl UltraLogApp {
                                     results.len()
                                 ))
                                 .size(font_12)
-                                .color(egui::Color32::from_rgb(150, 200, 150)),
+                                .color(theme.color(theme.success)),
                             );
                         }
                     }
@@ -113,6 +115,7 @@ impl UltraLogApp {
 
     /// Render the computed channels section
     fn render_tools_computed_section(&mut self, ui: &mut egui::Ui) {
+        let theme = self.theme();
         let font_12 = self.scaled_font(12.0);
         let font_14 = self.scaled_font(14.0);
 
@@ -142,7 +145,8 @@ impl UltraLogApp {
             // Buttons row
             ui.horizontal(|ui| {
                 // New Channel button
-                let accent_color = egui::Color32::from_rgb(113, 120, 78);
+                let accent_color = theme.color(theme.accent);
+                let accent_text = theme.readable_text_color(accent_color);
                 let new_btn = egui::Frame::NONE
                     .fill(accent_color)
                     .corner_radius(4)
@@ -150,7 +154,7 @@ impl UltraLogApp {
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new("+ New")
-                                .color(egui::Color32::WHITE)
+                                .color(accent_text)
                                 .size(font_12),
                         );
                     });
@@ -165,7 +169,7 @@ impl UltraLogApp {
 
                 // Manage Library button
                 let manage_btn = egui::Frame::NONE
-                    .fill(egui::Color32::from_rgb(60, 60, 60))
+                    .fill(theme.color(theme.card_hover))
                     .corner_radius(4)
                     .inner_margin(egui::vec2(10.0, 5.0))
                     .show(ui, |ui| {
@@ -196,7 +200,7 @@ impl UltraLogApp {
                                 channels.len()
                             ))
                             .size(font_12)
-                            .color(egui::Color32::from_rgb(150, 200, 150)),
+                            .color(theme.color(theme.success)),
                         );
                     }
                 }
@@ -250,6 +254,7 @@ impl UltraLogApp {
 
     /// Render the export section
     fn render_tools_export_section(&mut self, ui: &mut egui::Ui) {
+        let theme = self.theme();
         let font_12 = self.scaled_font(12.0);
         let font_14 = self.scaled_font(14.0);
 
@@ -282,19 +287,20 @@ impl UltraLogApp {
                 ui.horizontal(|ui| {
                     // PNG Export
                     ui.add_enabled_ui(can_export_png, |ui| {
+                        let fill = if can_export_png {
+                            theme.color(theme.accent_alt)
+                        } else {
+                            theme.color(theme.card)
+                        };
                         let btn = egui::Frame::NONE
-                            .fill(if can_export_png {
-                                egui::Color32::from_rgb(71, 108, 155)
-                            } else {
-                                egui::Color32::from_rgb(50, 50, 50)
-                            })
+                            .fill(fill)
                             .corner_radius(4)
                             .inner_margin(egui::vec2(12.0, 6.0))
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new("PNG")
                                         .color(if can_export_png {
-                                            egui::Color32::WHITE
+                                            theme.readable_text_color(fill)
                                         } else {
                                             egui::Color32::GRAY
                                         })
@@ -317,19 +323,20 @@ impl UltraLogApp {
 
                     // PDF Export
                     ui.add_enabled_ui(can_export_pdf, |ui| {
+                        let fill = if can_export_pdf {
+                            theme.color(theme.error)
+                        } else {
+                            theme.color(theme.card)
+                        };
                         let btn = egui::Frame::NONE
-                            .fill(if can_export_pdf {
-                                egui::Color32::from_rgb(155, 71, 71)
-                            } else {
-                                egui::Color32::from_rgb(50, 50, 50)
-                            })
+                            .fill(fill)
                             .corner_radius(4)
                             .inner_margin(egui::vec2(12.0, 6.0))
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new("PDF")
                                         .color(if can_export_pdf {
-                                            egui::Color32::WHITE
+                                            theme.readable_text_color(fill)
                                         } else {
                                             egui::Color32::GRAY
                                         })

@@ -14,8 +14,8 @@ mod common;
 use common::assertions::*;
 use common::example_files::*;
 use common::{example_file_exists, read_example_binary};
-use ultralog::parsers::speeduino::Speeduino;
-use ultralog::parsers::types::Parseable;
+use snowlv::parsers::speeduino::Speeduino;
+use snowlv::parsers::types::Parseable;
 
 // ============================================
 // Format Detection Tests

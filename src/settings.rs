@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use crate::i18n::Language;
+use crate::theme::ThemeId;
+use crate::units::UnitPreferences;
 
 /// User settings that persist across sessions
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -16,12 +18,12 @@ pub struct UserSettings {
     /// Selected language
     #[serde(default)]
     pub language: Language,
-    /// When true, scroll wheel zooms chart directly instead of panning
+    /// Selected application color theme
+    #[serde(default = "default_theme")]
+    pub theme: String,
+    /// When true, current channel values are shown beside the chart cursor
     #[serde(default)]
-    pub scroll_to_zoom: bool,
-    /// When true, drag on the chart pans the visible time window
-    #[serde(default = "default_drag_to_pan")]
-    pub drag_to_pan: bool,
+    pub values_follow_cursor: bool,
     /// When true, draw the chart background grid
     #[serde(default = "default_show_grid")]
     pub show_grid: bool,
@@ -29,17 +31,23 @@ pub struct UserSettings {
     /// before egui_plot's distance-based fade
     #[serde(default = "default_grid_opacity")]
     pub grid_opacity: u8,
+    /// When true, Discord Rich Presence includes the active log file name
+    #[serde(default = "default_discord_rpc_show_log_filename")]
+    pub discord_rpc_show_log_filename: bool,
+    /// Preferred display units for converted chart values
+    #[serde(default)]
+    pub unit_preferences: UnitPreferences,
 }
 
 fn default_version() -> u32 {
     1
 }
 
-fn default_show_grid() -> bool {
-    true
+fn default_theme() -> String {
+    ThemeId::default().id().to_string()
 }
 
-fn default_drag_to_pan() -> bool {
+fn default_show_grid() -> bool {
     true
 }
 
@@ -47,43 +55,54 @@ fn default_grid_opacity() -> u8 {
     255
 }
 
+fn default_discord_rpc_show_log_filename() -> bool {
+    true
+}
+
 impl Default for UserSettings {
     fn default() -> Self {
         Self {
             version: 1,
             language: Language::default(),
-            scroll_to_zoom: false,
-            drag_to_pan: default_drag_to_pan(),
+            theme: default_theme(),
+            values_follow_cursor: false,
             show_grid: default_show_grid(),
             grid_opacity: default_grid_opacity(),
+            discord_rpc_show_log_filename: default_discord_rpc_show_log_filename(),
+            unit_preferences: UnitPreferences::default(),
         }
     }
 }
 
 impl UserSettings {
-    /// Get the config directory path for UltraLog
+    /// Get the config directory path for SnowLV
     pub fn get_config_dir() -> Option<PathBuf> {
         #[cfg(target_os = "macos")]
         {
-            dirs::data_dir().map(|p| p.join("UltraLog"))
+            dirs::data_dir().map(|p| p.join("SnowLV"))
         }
         #[cfg(target_os = "windows")]
         {
-            dirs::config_dir().map(|p| p.join("UltraLog"))
+            dirs::config_dir().map(|p| p.join("SnowLV"))
         }
         #[cfg(target_os = "linux")]
         {
-            dirs::config_dir().map(|p| p.join("ultralog"))
+            dirs::config_dir().map(|p| p.join("snowlv"))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
-            dirs::config_dir().map(|p| p.join("ultralog"))
+            dirs::config_dir().map(|p| p.join("snowlv"))
         }
     }
 
     /// Get the path to the settings JSON file
     pub fn get_settings_path() -> Option<PathBuf> {
         Self::get_config_dir().map(|p| p.join("settings.json"))
+    }
+
+    /// Get the directory where user-defined theme files are stored
+    pub fn get_themes_dir() -> Option<PathBuf> {
+        Self::get_config_dir().map(|p| p.join("themes"))
     }
 
     /// Load settings from disk

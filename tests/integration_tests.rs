@@ -1,13 +1,13 @@
-//! Integration tests for UltraLog parser system
+//! Integration tests for SnowLV parser system
 //!
 //! These tests verify end-to-end parsing of example log files
-//! from various ECU formats supported by UltraLog.
+//! from various ECU formats supported by SnowLV.
 
-use ultralog::parsers::ecumaster::EcuMaster;
-use ultralog::parsers::haltech::Haltech;
-use ultralog::parsers::romraider::RomRaider;
-use ultralog::parsers::speeduino::Speeduino;
-use ultralog::parsers::types::Parseable;
+use snowlv::parsers::ecumaster::EcuMaster;
+use snowlv::parsers::haltech::Haltech;
+use snowlv::parsers::romraider::RomRaider;
+use snowlv::parsers::speeduino::Speeduino;
+use snowlv::parsers::types::Parseable;
 
 /// Helper function to read a file, panicking with a clear message if not found.
 /// This ensures CI catches missing example files instead of silently skipping tests.

@@ -5,10 +5,10 @@
 use eframe::egui;
 use rust_i18n::t;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::normalize::get_builtin_mappings;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the field normalization editor window
     pub fn render_normalization_editor(&mut self, ctx: &egui::Context) {
         if !self.show_normalization_editor {

@@ -6,7 +6,7 @@
 //! - Serialization/deserialization
 //! - Translation loading via rust-i18n
 
-use ultralog::i18n::Language;
+use snowlv::i18n::Language;
 
 // ============================================
 // Language Enum Basic Tests

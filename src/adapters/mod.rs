@@ -6,7 +6,7 @@
 //! ## Usage
 //!
 //! ```rust,ignore
-//! use ultralog::adapters::{normalize_from_spec, get_channel_metadata};
+//! use snowlv::adapters::{normalize_from_spec, get_channel_metadata};
 //!
 //! // Normalize a channel name using spec definitions
 //! if let Some(normalized) = normalize_from_spec("Engine Speed") {

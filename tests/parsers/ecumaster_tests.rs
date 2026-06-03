@@ -14,8 +14,8 @@ use common::assertions::*;
 use common::example_files::*;
 use common::float_cmp::*;
 use common::{example_file_exists, read_example_file};
-use ultralog::parsers::ecumaster::EcuMaster;
-use ultralog::parsers::types::Parseable;
+use snowlv::parsers::ecumaster::EcuMaster;
+use snowlv::parsers::types::Parseable;
 
 // ============================================
 // Format Detection Tests

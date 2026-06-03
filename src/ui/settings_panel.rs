@@ -1,4 +1,4 @@
-//! Settings panel - consolidated settings for display, units, normalization, and updates.
+//! Settings panel - consolidated settings for display, units, and normalization.
 //!
 //! This panel provides a single location for all user preferences.
 
@@ -6,16 +6,17 @@ use eframe::egui;
 use rust_i18n::t;
 
 use crate::analytics;
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::i18n::Language;
+use crate::settings::UserSettings;
 use crate::state::FontScale;
+use crate::theme::ThemeRegistry;
 use crate::units::{
     AccelerationUnit, AfrLambdaUnit, DistanceUnit, FlowUnit, FuelEconomyUnit, PressureUnit,
-    SpeedUnit, TemperatureUnit, VolumeUnit,
+    SpeedUnit, TemperatureUnit, UnitPreferences, UnitPreset, VolumeUnit,
 };
-use crate::updater::UpdateState;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the settings panel content (called from side_panel.rs)
     pub fn render_settings_panel_content(&mut self, ui: &mut egui::Ui) {
         // Language settings section
@@ -32,6 +33,13 @@ impl UltraLogApp {
         ui.separator();
         ui.add_space(8.0);
 
+        // Discord RPC settings
+        self.render_discord_rpc_settings(ui);
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+
         // Field normalization settings
         self.render_normalization_settings(ui);
 
@@ -41,13 +49,6 @@ impl UltraLogApp {
 
         // Unit preferences
         self.render_unit_settings(ui);
-
-        ui.add_space(8.0);
-        ui.separator();
-        ui.add_space(8.0);
-
-        // Update settings
-        self.render_update_settings(ui);
     }
 
     /// Render language settings section
@@ -108,6 +109,77 @@ impl UltraLogApp {
         )
         .default_open(true)
         .show(ui, |ui| {
+            ui.label(egui::RichText::new(t!("settings.theme")).size(font_14));
+            let theme_options: Vec<(String, String)> = self
+                .theme_registry
+                .themes()
+                .iter()
+                .map(|theme| (theme.id.clone(), theme.display_name.clone()))
+                .collect();
+            let mut selected_theme = self.theme_id.clone();
+            egui::ComboBox::from_id_salt("theme_selector")
+                .selected_text(self.theme_display_name())
+                .width(180.0)
+                .show_ui(ui, |ui| {
+                    for (theme_id, display_name) in theme_options {
+                        ui.selectable_value(&mut selected_theme, theme_id, display_name);
+                    }
+                });
+
+            if selected_theme != self.theme_id {
+                self.theme_id = selected_theme.clone();
+                self.user_settings.theme = selected_theme;
+                if let Err(e) = self.user_settings.save() {
+                    self.show_toast_error(&t!("toast.failed_to_save", error = e));
+                }
+                ui.ctx().request_repaint();
+            }
+
+            ui.add_space(8.0);
+
+            self.render_theme_preview(ui);
+
+            ui.add_space(8.0);
+
+            ui.horizontal_wrapped(|ui| {
+                if ui.button("Open Themes Folder").clicked() {
+                    if let Some(themes_dir) = UserSettings::get_themes_dir() {
+                        match ThemeRegistry::ensure_default_theme_files(&themes_dir).and_then(
+                            |_| {
+                                open::that(&themes_dir)
+                                    .map_err(|e| format!("Failed to open themes folder: {}", e))
+                            },
+                        ) {
+                            Ok(()) => {}
+                            Err(e) => self.show_toast_error(&e),
+                        }
+                    } else {
+                        self.show_toast_error("Could not determine themes directory");
+                    }
+                }
+
+                if ui.button("Reload Themes").clicked() {
+                    self.reload_theme_registry();
+                    if let Err(e) = self.user_settings.save() {
+                        self.show_toast_error(&t!("toast.failed_to_save", error = e));
+                    }
+                    ui.ctx().request_repaint();
+                }
+            });
+
+            if !self.theme_registry.load_errors().is_empty() {
+                ui.add_space(4.0);
+                for error in self.theme_registry.load_errors().iter().take(3) {
+                    ui.label(
+                        egui::RichText::new(error)
+                            .size(font_12)
+                            .color(egui::Color32::from_rgb(220, 90, 90)),
+                    );
+                }
+            }
+
+            ui.add_space(8.0);
+
             // Colorblind mode
             let old_color_blind_mode = self.color_blind_mode;
             ui.checkbox(
@@ -168,39 +240,19 @@ impl UltraLogApp {
 
             ui.add_space(8.0);
 
-            // Scroll to zoom
-            let old_scroll_to_zoom = self.scroll_to_zoom;
+            // Values follow cursor
+            let old_values_follow_cursor = self.values_follow_cursor;
             ui.checkbox(
-                &mut self.scroll_to_zoom,
-                egui::RichText::new(t!("settings.scroll_to_zoom")).size(font_14),
+                &mut self.values_follow_cursor,
+                egui::RichText::new(t!("settings.values_follow_cursor")).size(font_14),
             );
             ui.label(
-                egui::RichText::new(t!("settings.scroll_to_zoom_desc"))
+                egui::RichText::new(t!("settings.values_follow_cursor_desc"))
                     .size(font_12)
                     .color(egui::Color32::GRAY),
             );
-            if self.scroll_to_zoom != old_scroll_to_zoom {
-                self.user_settings.scroll_to_zoom = self.scroll_to_zoom;
-                if let Err(e) = self.user_settings.save() {
-                    self.show_toast_error(&t!("toast.failed_to_save", error = e));
-                }
-            }
-
-            ui.add_space(8.0);
-
-            // Drag to pan
-            let old_drag_to_pan = self.drag_to_pan;
-            ui.checkbox(
-                &mut self.drag_to_pan,
-                egui::RichText::new(t!("settings.drag_to_pan")).size(font_14),
-            );
-            ui.label(
-                egui::RichText::new(t!("settings.drag_to_pan_desc"))
-                    .size(font_12)
-                    .color(egui::Color32::GRAY),
-            );
-            if self.drag_to_pan != old_drag_to_pan {
-                self.user_settings.drag_to_pan = self.drag_to_pan;
+            if self.values_follow_cursor != old_values_follow_cursor {
+                self.user_settings.values_follow_cursor = self.values_follow_cursor;
                 if let Err(e) = self.user_settings.save() {
                     self.show_toast_error(&t!("toast.failed_to_save", error = e));
                 }
@@ -245,6 +297,50 @@ impl UltraLogApp {
                         self.show_toast_error(&t!("toast.failed_to_save", error = e));
                     }
                 }
+            }
+        });
+    }
+
+    /// Render Discord RPC settings section
+    fn render_discord_rpc_settings(&mut self, ui: &mut egui::Ui) {
+        let font_12 = self.scaled_font(12.0);
+        let font_14 = self.scaled_font(14.0);
+
+        egui::CollapsingHeader::new(
+            egui::RichText::new(t!("settings.discord_rpc"))
+                .size(font_14)
+                .strong(),
+        )
+        .default_open(true)
+        .show(ui, |ui| {
+            let old_show_log_filename = self.discord_rpc_show_log_filename;
+            ui.checkbox(
+                &mut self.discord_rpc_show_log_filename,
+                egui::RichText::new(t!("settings.discord_rpc_show_log_filename")).size(font_14),
+            );
+            ui.label(
+                egui::RichText::new(t!("settings.discord_rpc_show_log_filename_desc"))
+                    .size(font_12)
+                    .color(egui::Color32::GRAY),
+            );
+
+            if self.discord_rpc_show_log_filename != old_show_log_filename {
+                self.user_settings.discord_rpc_show_log_filename =
+                    self.discord_rpc_show_log_filename;
+                if let Err(e) = self.user_settings.save() {
+                    self.show_toast_error(&t!("toast.failed_to_save", error = e));
+                }
+            }
+        });
+    }
+
+    fn render_theme_preview(&self, ui: &mut egui::Ui) {
+        let theme = self.theme();
+        ui.horizontal_wrapped(|ui| {
+            for color in theme.chart.iter().take(10) {
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(18.0, 18.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, 3.0, theme.color(*color));
             }
         });
     }
@@ -318,11 +414,53 @@ impl UltraLogApp {
         )
         .default_open(true)
         .show(ui, |ui| {
+            let previous_preferences = self.unit_preferences.clone();
+
             ui.label(
                 egui::RichText::new(t!("settings.units_desc"))
                     .size(font_12)
                     .color(egui::Color32::GRAY),
             );
+            ui.add_space(8.0);
+
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Preset:").size(font_12));
+
+                let preset = self.unit_preferences.preset();
+                egui::ComboBox::from_id_salt("unit_preset")
+                    .selected_text(preset.label())
+                    .width(120.0)
+                    .show_ui(ui, |ui| {
+                        if ui
+                            .selectable_label(
+                                preset == UnitPreset::Metric,
+                                UnitPreset::Metric.label(),
+                            )
+                            .clicked()
+                        {
+                            self.unit_preferences = UnitPreferences::metric();
+                            ui.close();
+                        }
+
+                        if ui
+                            .selectable_label(
+                                preset == UnitPreset::Imperial,
+                                UnitPreset::Imperial.label(),
+                            )
+                            .clicked()
+                        {
+                            self.unit_preferences = UnitPreferences::imperial();
+                            ui.close();
+                        }
+
+                        ui.add_enabled_ui(false, |ui| {
+                            let _ = ui.selectable_label(
+                                preset == UnitPreset::Custom,
+                                UnitPreset::Custom.label(),
+                            );
+                        });
+                    });
+            });
             ui.add_space(8.0);
 
             // Create a grid for unit selections
@@ -364,6 +502,11 @@ impl UltraLogApp {
                                 &mut self.unit_preferences.pressure,
                                 PressureUnit::KPa,
                                 "kPa",
+                            );
+                            ui.selectable_value(
+                                &mut self.unit_preferences.pressure,
+                                PressureUnit::HPa,
+                                "hPa",
                             );
                             ui.selectable_value(
                                 &mut self.unit_preferences.pressure,
@@ -429,8 +572,13 @@ impl UltraLogApp {
                             );
                             ui.selectable_value(
                                 &mut self.unit_preferences.fuel_economy,
-                                FuelEconomyUnit::Mpg,
-                                "mpg",
+                                FuelEconomyUnit::MpgUs,
+                                "mpg US",
+                            );
+                            ui.selectable_value(
+                                &mut self.unit_preferences.fuel_economy,
+                                FuelEconomyUnit::MpgUk,
+                                "mpg UK",
                             );
                             ui.selectable_value(
                                 &mut self.unit_preferences.fuel_economy,
@@ -516,124 +664,12 @@ impl UltraLogApp {
                         });
                     ui.end_row();
                 });
-        });
-    }
 
-    /// Render update settings
-    fn render_update_settings(&mut self, ui: &mut egui::Ui) {
-        let font_12 = self.scaled_font(12.0);
-        let font_14 = self.scaled_font(14.0);
-
-        egui::CollapsingHeader::new(
-            egui::RichText::new(format!("\u{1F504} {}", t!("settings.updates")))
-                .size(font_14)
-                .strong(),
-        )
-        .default_open(true)
-        .show(ui, |ui| {
-            // Auto-check preference
-            ui.checkbox(
-                &mut self.auto_check_updates,
-                egui::RichText::new(t!("settings.check_on_startup")).size(font_14),
-            );
-            ui.label(
-                egui::RichText::new(t!("settings.auto_check_desc"))
-                    .size(font_12)
-                    .color(egui::Color32::GRAY),
-            );
-
-            ui.add_space(8.0);
-
-            // Check now button
-            let is_checking = matches!(self.update_state, UpdateState::Checking);
-            ui.add_enabled_ui(!is_checking, |ui| {
-                let btn = egui::Frame::NONE
-                    .fill(egui::Color32::from_rgb(60, 60, 60))
-                    .corner_radius(4)
-                    .inner_margin(egui::vec2(12.0, 6.0))
-                    .show(ui, |ui| {
-                        let text = if is_checking {
-                            t!("settings.checking")
-                        } else {
-                            t!("settings.check_for_updates")
-                        };
-                        ui.label(
-                            egui::RichText::new(text)
-                                .color(egui::Color32::LIGHT_GRAY)
-                                .size(font_14),
-                        );
-                    });
-
-                if !is_checking && btn.response.interact(egui::Sense::click()).clicked() {
-                    self.start_update_check();
+            if self.unit_preferences != previous_preferences {
+                self.user_settings.unit_preferences = self.unit_preferences.clone();
+                if let Err(e) = self.user_settings.save() {
+                    eprintln!("Failed to save settings: {}", e);
                 }
-
-                if btn.response.hovered() && !is_checking {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-            });
-
-            ui.add_space(8.0);
-
-            // Version info
-            let version = env!("CARGO_PKG_VERSION");
-            ui.label(
-                egui::RichText::new(t!("settings.current_version", version = version))
-                    .size(font_12)
-                    .color(egui::Color32::GRAY),
-            );
-
-            // Show update status
-            match &self.update_state {
-                UpdateState::Checking => {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(
-                            egui::RichText::new(t!("settings.checking"))
-                                .size(font_12)
-                                .color(egui::Color32::GRAY),
-                        );
-                    });
-                }
-                UpdateState::UpdateAvailable(info) => {
-                    ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(format!(
-                            "\u{2713} {}",
-                            t!("settings.update_available", version = &info.new_version)
-                        ))
-                        .size(font_12)
-                        .color(egui::Color32::from_rgb(150, 200, 150)),
-                    );
-
-                    let view_btn = ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(format!(
-                                "{} \u{2192}",
-                                t!("settings.view_details")
-                            ))
-                            .size(font_12)
-                            .color(egui::Color32::from_rgb(150, 180, 220)),
-                        )
-                        .sense(egui::Sense::click()),
-                    );
-
-                    if view_btn.clicked() {
-                        self.show_update_dialog = true;
-                    }
-
-                    if view_btn.hovered() {
-                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                    }
-                }
-                UpdateState::Error(msg) => {
-                    ui.label(
-                        egui::RichText::new(format!("⚠ {}", msg))
-                            .size(font_12)
-                            .color(egui::Color32::from_rgb(200, 150, 100)),
-                    );
-                }
-                _ => {}
             }
         });
     }

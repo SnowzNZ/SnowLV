@@ -13,8 +13,8 @@ mod common;
 use common::assertions::*;
 use common::float_cmp::*;
 use common::{example_file_exists, read_example_file};
-use ultralog::parsers::motorsport_electronics::MotorsportElectronics;
-use ultralog::parsers::types::Parseable;
+use snowlv::parsers::motorsport_electronics::MotorsportElectronics;
+use snowlv::parsers::types::Parseable;
 
 const ME221_SMALL: &str = "exampleLogs/motorsportElectronics/ME221_2025_12_22_13_13_40.csv";
 const ME221_LARGE: &str = "exampleLogs/motorsportElectronics/ME221_2026_04_12_11_59_52.csv";

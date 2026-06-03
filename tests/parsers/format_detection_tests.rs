@@ -8,11 +8,11 @@ mod common;
 
 use common::example_files::*;
 use common::{example_file_exists, read_example_binary, read_example_file};
-use ultralog::parsers::aim::Aim;
-use ultralog::parsers::ecumaster::EcuMaster;
-use ultralog::parsers::link::Link;
-use ultralog::parsers::romraider::RomRaider;
-use ultralog::parsers::speeduino::Speeduino;
+use snowlv::parsers::aim::Aim;
+use snowlv::parsers::ecumaster::EcuMaster;
+use snowlv::parsers::link::Link;
+use snowlv::parsers::romraider::RomRaider;
+use snowlv::parsers::speeduino::Speeduino;
 
 // ============================================
 // Format Marker Tests

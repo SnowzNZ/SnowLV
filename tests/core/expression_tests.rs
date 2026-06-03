@@ -7,13 +7,13 @@
 //! - Time-shift resolution (index and time-based)
 //! - Edge cases and error handling
 
-use std::collections::HashMap;
-use ultralog::computed::TimeShift;
-use ultralog::expression::{
+use snowlv::computed::TimeShift;
+use snowlv::expression::{
     build_channel_bindings, evaluate_all_records, extract_channel_references, generate_preview,
     validate_formula,
 };
-use ultralog::parsers::types::Value;
+use snowlv::parsers::types::Value;
+use std::collections::HashMap;
 
 // ============================================
 // Channel Reference Extraction Tests

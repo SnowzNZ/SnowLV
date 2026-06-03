@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Version bump script for UltraLog
+# Version bump script for SnowLV
 # Updates the version in all locations:
 #   - Cargo.toml
 #   - README.md (version badge)

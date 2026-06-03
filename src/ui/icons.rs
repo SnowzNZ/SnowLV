@@ -67,3 +67,37 @@ pub fn draw_upload_icon(ui: &mut egui::Ui, center: egui::Pos2, size: f32, color:
         egui::Stroke::new(2.0, color),
     );
 }
+
+/// Draw an eye icon, optionally slashed for hidden state.
+pub fn draw_eye_icon(
+    ui: &mut egui::Ui,
+    center: egui::Pos2,
+    size: f32,
+    color: egui::Color32,
+    slashed: bool,
+) {
+    let painter = ui.painter();
+    let half_width = size * 0.48;
+    let half_height = size * 0.26;
+    let stroke = egui::Stroke::new(1.6, color);
+
+    let left = egui::pos2(center.x - half_width, center.y);
+    let right = egui::pos2(center.x + half_width, center.y);
+    let top = egui::pos2(center.x, center.y - half_height);
+    let bottom = egui::pos2(center.x, center.y + half_height);
+
+    painter.add(egui::Shape::line(vec![left, top, right], stroke));
+    painter.add(egui::Shape::line(vec![left, bottom, right], stroke));
+    painter.circle_stroke(center, size * 0.14, stroke);
+
+    if slashed {
+        let slash_offset = size * 0.38;
+        painter.line_segment(
+            [
+                egui::pos2(center.x - slash_offset, center.y + slash_offset),
+                egui::pos2(center.x + slash_offset, center.y - slash_offset),
+            ],
+            egui::Stroke::new(2.0, color),
+        );
+    }
+}

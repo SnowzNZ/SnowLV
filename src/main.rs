@@ -1,14 +1,14 @@
-//! UltraLog - A high-performance ECU log viewer written in Rust
+//! SnowLV - A high-performance ECU log viewer written in Rust
 //!
-//! UltraLog is a desktop application for viewing and analyzing ECU (Engine Control Unit)
+//! SnowLV is a desktop application for viewing and analyzing ECU (Engine Control Unit)
 //! log files from automotive performance tuning systems. It supports multiple ECU formats
 //! including Haltech, MegaSquirt, AEM, and more.
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use eframe::egui::IconData;
+use snowlv::app::SnowLVApp;
 use std::sync::Arc;
-use ultralog::app::UltraLogApp;
 
 /// Set up Linux-specific scaling configuration before window creation.
 /// This handles common DPI/scaling issues on X11, especially with KDE Plasma.
@@ -79,7 +79,7 @@ fn set_macos_app_name() {
     use objc2_foundation::NSString;
 
     unsafe {
-        let app_name = NSString::from_str("UltraLog");
+        let app_name = NSString::from_str("SnowLV");
         let process_info_class = class!(NSProcessInfo);
         let process_info: *mut objc2::runtime::AnyObject =
             msg_send![process_info_class, processInfo];
@@ -99,7 +99,7 @@ fn main() -> eframe::Result<()> {
     tracing_subscriber::fmt::init();
 
     // Track app startup for analytics
-    ultralog::analytics::track_app_started();
+    snowlv::analytics::track_app_started();
 
     // Load platform-specific app icon
     let icon = load_app_icon();
@@ -114,8 +114,8 @@ fn main() -> eframe::Result<()> {
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_inner_size(initial_size)
         .with_min_inner_size(min_size)
-        .with_title("UltraLog - ECU Log Viewer")
-        .with_app_id("UltraLog")
+        .with_title("SnowLV - ECU Log Viewer")
+        .with_app_id("SnowLV")
         .with_drag_and_drop(true)
         .with_resizable(true);
 
@@ -138,8 +138,8 @@ fn main() -> eframe::Result<()> {
 
     // Run the application
     eframe::run_native(
-        "UltraLog",
+        "SnowLV",
         native_options,
-        Box::new(|cc| Ok(Box::new(UltraLogApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(SnowLVApp::new(cc)))),
     )
 }

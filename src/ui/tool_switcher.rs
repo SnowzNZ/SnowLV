@@ -1,20 +1,21 @@
 //! Tool switcher component for switching between different views.
 //!
-//! Renders a pill-style tab bar at the top of the main content area
-//! allowing users to switch between Log Viewer and Scatter Plots views.
+//! Renders compact buttons in the top header for Log Viewer, Scatter Plots,
+//! and Histogram.
 
 use eframe::egui;
 use rust_i18n::t;
 
 use crate::analytics;
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::state::ActiveTool;
 
-impl UltraLogApp {
-    /// Render the tool switcher pill tabs
+impl SnowLVApp {
+    /// Render the tool switcher buttons
     pub fn render_tool_switcher(&mut self, ui: &mut egui::Ui) {
-        ui.horizontal(|ui| {
-            ui.add_space(10.0);
+        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let theme = self.theme();
 
             // Define available tools
             let tools = [
@@ -28,21 +29,21 @@ impl UltraLogApp {
 
                 // Style the button based on selection state
                 let button_fill = if is_selected {
-                    egui::Color32::from_rgb(70, 70, 70)
+                    theme.color(theme.selection)
                 } else {
-                    egui::Color32::from_rgb(45, 45, 45)
+                    theme.color(theme.card)
                 };
 
                 let text_color = if is_selected {
-                    egui::Color32::WHITE
+                    theme.color(theme.text)
                 } else {
-                    egui::Color32::from_rgb(180, 180, 180)
+                    theme.color(theme.muted_text)
                 };
 
                 let stroke = if is_selected {
-                    egui::Stroke::new(1.5, egui::Color32::from_rgb(113, 120, 78))
+                    egui::Stroke::new(1.5, theme.color(theme.accent))
                 } else {
-                    egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80))
+                    egui::Stroke::new(1.0, theme.color(theme.grid))
                 };
 
                 // Get translated tool name
@@ -52,18 +53,26 @@ impl UltraLogApp {
                     ActiveTool::Histogram => t!("tools.histogram"),
                 };
 
-                // Create pill-style button
-                let response = ui.add(
-                    egui::Button::new(
-                        egui::RichText::new(tool_name.as_ref())
-                            .size(self.scaled_font(14.0))
-                            .color(text_color),
+                let shortcut = match tool {
+                    ActiveTool::LogViewer => "\u{2318}1",
+                    ActiveTool::ScatterPlot => "\u{2318}2",
+                    ActiveTool::Histogram => "\u{2318}3",
+                };
+
+                // Create compact view-switch button
+                let response = ui
+                    .add(
+                        egui::Button::new(
+                            egui::RichText::new(tool_name.as_ref())
+                                .size(self.scaled_font(13.0))
+                                .color(text_color),
+                        )
+                        .fill(button_fill)
+                        .stroke(stroke)
+                        .corner_radius(egui::CornerRadius::same(4))
+                        .min_size(egui::vec2(96.0, 26.0)),
                     )
-                    .fill(button_fill)
-                    .stroke(stroke)
-                    .corner_radius(egui::CornerRadius::same(16))
-                    .min_size(egui::vec2(100.0, 32.0)),
-                );
+                    .on_hover_text(shortcut);
 
                 if response.clicked() {
                     self.active_tool = tool;
@@ -72,8 +81,6 @@ impl UltraLogApp {
                 if response.hovered() {
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
-
-                ui.add_space(4.0);
             }
         });
     }

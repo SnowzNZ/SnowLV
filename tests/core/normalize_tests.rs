@@ -7,11 +7,11 @@
 //! - Sorting algorithm for channel lists
 //! - Display name formatting
 
-use std::collections::HashMap;
-use ultralog::normalize::{
+use snowlv::normalize::{
     get_builtin_mappings, get_display_name, has_normalization, normalize_channel_name,
     normalize_channel_name_with_custom, sort_channels_by_priority,
 };
+use std::collections::HashMap;
 
 // ============================================
 // Basic Normalization Tests

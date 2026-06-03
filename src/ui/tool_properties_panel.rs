@@ -7,11 +7,11 @@
 use eframe::egui;
 use rust_i18n::t;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::normalize::sort_channels_by_priority;
-use crate::state::{ActiveTool, MAX_CHANNELS};
+use crate::state::{ActiveTool, PlotChannelDragPayload, MAX_CHANNELS};
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the tool properties panel content (called from side_panel.rs)
     /// Routes to the appropriate sub-panel based on active_tool
     pub fn render_tool_properties_panel_content(&mut self, ui: &mut egui::Ui) {
@@ -24,6 +24,7 @@ impl UltraLogApp {
 
     /// Render Log Viewer properties (channel selection)
     fn render_log_viewer_properties(&mut self, ui: &mut egui::Ui) {
+        let theme = self.theme();
         // Pre-compute scaled font sizes
         let font_12 = self.scaled_font(12.0);
         let font_14 = self.scaled_font(14.0);
@@ -58,19 +59,19 @@ impl UltraLogApp {
                     // Single Plot button
                     let is_single = !stacked_mode;
                     let single_fill = if is_single {
-                        egui::Color32::from_rgb(70, 70, 70)
+                        theme.color(theme.selection)
                     } else {
-                        egui::Color32::from_rgb(45, 45, 45)
+                        theme.color(theme.card)
                     };
                     let single_text_color = if is_single {
-                        egui::Color32::WHITE
+                        theme.readable_text_color(single_fill)
                     } else {
-                        egui::Color32::from_rgb(180, 180, 180)
+                        theme.color(theme.muted_text)
                     };
                     let single_stroke = if is_single {
-                        egui::Stroke::new(1.5, egui::Color32::from_rgb(113, 120, 78))
+                        egui::Stroke::new(1.5, theme.color(theme.accent))
                     } else {
-                        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80))
+                        egui::Stroke::new(1.0, theme.color(theme.grid))
                     };
 
                     let single_btn = ui.add(
@@ -97,19 +98,19 @@ impl UltraLogApp {
                     // Stacked Plots button
                     let is_stacked = stacked_mode;
                     let stacked_fill = if is_stacked {
-                        egui::Color32::from_rgb(70, 70, 70)
+                        theme.color(theme.selection)
                     } else {
-                        egui::Color32::from_rgb(45, 45, 45)
+                        theme.color(theme.card)
                     };
                     let stacked_text_color = if is_stacked {
-                        egui::Color32::WHITE
+                        theme.readable_text_color(stacked_fill)
                     } else {
-                        egui::Color32::from_rgb(180, 180, 180)
+                        theme.color(theme.muted_text)
                     };
                     let stacked_stroke = if is_stacked {
-                        egui::Stroke::new(1.5, egui::Color32::from_rgb(113, 120, 78))
+                        egui::Stroke::new(1.5, theme.color(theme.accent))
                     } else {
-                        egui::Stroke::new(1.0, egui::Color32::from_rgb(80, 80, 80))
+                        egui::Stroke::new(1.0, theme.color(theme.grid))
                     };
 
                     let stacked_btn = ui.add(
@@ -138,7 +139,8 @@ impl UltraLogApp {
             ui.add_space(8.0);
 
             // Computed Channels button
-            let primary_color = egui::Color32::from_rgb(113, 120, 78);
+            let primary_color = theme.color(theme.accent);
+            let primary_text = theme.readable_text_color(primary_color);
             let computed_btn = egui::Frame::NONE
                 .fill(primary_color)
                 .corner_radius(4)
@@ -147,12 +149,12 @@ impl UltraLogApp {
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("\u{0192}")
-                                .color(egui::Color32::WHITE)
+                                .color(primary_text)
                                 .size(font_14),
                         );
                         ui.label(
                             egui::RichText::new(t!("channels.computed_channels"))
-                                .color(egui::Color32::WHITE)
+                                .color(primary_text)
                                 .size(font_14),
                         );
                     });
@@ -177,7 +179,7 @@ impl UltraLogApp {
             let mut search_text = current_search;
             let mut search_changed = false;
             egui::Frame::NONE
-                .fill(egui::Color32::from_rgb(50, 50, 50))
+                .fill(theme.color(theme.card))
                 .corner_radius(4)
                 .inner_margin(egui::vec2(8.0, 6.0))
                 .show(ui, |ui| {
@@ -252,6 +254,7 @@ impl UltraLogApp {
 
     /// Render the channel list in compact form
     fn render_channel_list_compact(&mut self, ui: &mut egui::Ui, file_index: usize, search: &str) {
+        let theme = self.theme();
         let font_14 = self.scaled_font(14.0);
         let search_lower = search.to_lowercase();
 
@@ -297,18 +300,18 @@ impl UltraLogApp {
                 .position(|c| c.file_index == file_index && c.channel_index == channel_index);
             let is_selected = selected_idx.is_some();
 
+            let bg_color = if is_selected {
+                theme.color(theme.selection)
+            } else {
+                egui::Color32::TRANSPARENT
+            };
+
             let text_color = if is_empty {
                 egui::Color32::from_rgb(100, 100, 100)
             } else if is_selected {
-                egui::Color32::WHITE
+                theme.readable_text_color(bg_color)
             } else {
                 egui::Color32::LIGHT_GRAY
-            };
-
-            let bg_color = if is_selected {
-                egui::Color32::from_rgb(55, 60, 50)
-            } else {
-                egui::Color32::TRANSPARENT
             };
 
             let frame = egui::Frame::NONE
@@ -411,6 +414,7 @@ impl UltraLogApp {
 
     /// Render stacked plot list with channels organized by plot
     fn render_stacked_plot_list(&mut self, ui: &mut egui::Ui, file_index: usize, search: &str) {
+        let theme = self.theme();
         let font_14 = self.scaled_font(14.0);
         let search_lower = search.to_lowercase();
 
@@ -429,19 +433,22 @@ impl UltraLogApp {
         let channels_with_data = self.files[file_index].channels_with_data.clone();
 
         let mut channel_to_add: Option<(usize, usize, usize)> = None; // (file_idx, channel_idx, plot_id)
+        let mut channel_to_move: Option<(usize, usize)> = None; // (selected_channel_idx, plot_id)
         let mut channel_to_remove: Option<usize> = None;
         let mut plot_to_delete: Option<usize> = None;
 
         // "+ New Plot" button
+        let new_plot_fill = theme.color(theme.accent_alt);
+        let new_plot_text = theme.readable_text_color(new_plot_fill);
         let new_plot_btn = egui::Frame::NONE
-            .fill(egui::Color32::from_rgb(71, 108, 155))
+            .fill(new_plot_fill)
             .corner_radius(4)
             .inner_margin(egui::vec2(10.0, 6.0))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new("+ New Plot")
-                            .color(egui::Color32::WHITE)
+                            .color(new_plot_text)
                             .size(font_14),
                     );
                 });
@@ -469,13 +476,13 @@ impl UltraLogApp {
             .auto_shrink([false, false])
             .show(ui, |ui| {
                 for plot_area in &plot_areas {
-                    let plot_channels: Vec<(usize, String)> = plot_area
+                    let plot_channels: Vec<(usize, String, bool)> = plot_area
                         .channel_indices
                         .iter()
                         .filter_map(|&idx| {
                             selected_channels.get(idx).map(|ch| {
                                 let name = ch.channel.name();
-                                (idx, name)
+                                (idx, name, ch.hidden)
                             })
                         })
                         .collect();
@@ -525,7 +532,7 @@ impl UltraLogApp {
                                     egui::RichText::new(&header_text)
                                         .size(font_14)
                                         .strong()
-                                        .color(egui::Color32::from_rgb(159, 166, 119)),
+                                        .color(theme.color(theme.success)),
                                 );
 
                                 // Right-aligned delete button (only if not last plot)
@@ -567,28 +574,46 @@ impl UltraLogApp {
                                     egui::Sense::hover(),
                                 );
 
-                                // Check for dropped channel
-                                if let Some(payload) =
-                                    response.dnd_release_payload::<(usize, usize)>()
+                                // Check for dropped channel. Guard by payload type because
+                                // `dnd_release_payload` consumes the active payload even on mismatch.
+                                if egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(
+                                    ui.ctx(),
+                                ) {
+                                    if let Some(payload) =
+                                        response.dnd_release_payload::<(usize, usize)>()
+                                    {
+                                        if has_capacity {
+                                            let (dropped_file_idx, dropped_channel_idx) = *payload;
+                                            channel_to_add = Some((
+                                                dropped_file_idx,
+                                                dropped_channel_idx,
+                                                plot_id,
+                                            ));
+                                        }
+                                    }
+                                } else if egui::DragAndDrop::has_payload_of_type::<
+                                    PlotChannelDragPayload,
+                                >(ui.ctx())
                                 {
-                                    if has_capacity {
-                                        let (dropped_file_idx, dropped_channel_idx) = *payload;
-                                        channel_to_add =
-                                            Some((dropped_file_idx, dropped_channel_idx, plot_id));
+                                    if let Some(payload) =
+                                        response.dnd_release_payload::<PlotChannelDragPayload>()
+                                    {
+                                        channel_to_move = Some((payload.channel_idx, plot_id));
                                     }
                                 }
 
                                 // Highlight as drop zone when hovering with drag payload
-                                if response.dnd_hover_payload::<(usize, usize)>().is_some()
-                                    && has_capacity
-                                {
+                                let accepts_new_channel =
+                                    response.dnd_hover_payload::<(usize, usize)>().is_some()
+                                        && has_capacity;
+                                let accepts_moved_channel = response
+                                    .dnd_hover_payload::<PlotChannelDragPayload>()
+                                    .is_some();
+                                if accepts_new_channel || accepts_moved_channel {
                                     ui.painter().rect_stroke(
                                         rect,
                                         egui::CornerRadius::same(4),
-                                        egui::Stroke::new(
-                                            2.0,
-                                            egui::Color32::from_rgb(71, 108, 155),
-                                        ),
+                                        egui::Stroke::new(2.0, theme.color(theme.accent_alt)),
                                         egui::StrokeKind::Inside,
                                     );
                                 }
@@ -609,9 +634,19 @@ impl UltraLogApp {
                                     });
                                 } else {
                                     child_ui.add_space(10.0);
-                                    for (channel_idx, channel_name) in &plot_channels {
+                                    for (channel_idx, channel_name, hidden) in &plot_channels {
+                                        let fill_color = if *hidden {
+                                            theme.color(theme.card)
+                                        } else {
+                                            theme.color(theme.selection)
+                                        };
+                                        let text_color = if *hidden {
+                                            egui::Color32::GRAY
+                                        } else {
+                                            theme.readable_text_color(fill_color)
+                                        };
                                         let frame = egui::Frame::NONE
-                                            .fill(egui::Color32::from_rgb(55, 60, 50))
+                                            .fill(fill_color)
                                             .corner_radius(3)
                                             .inner_margin(egui::Margin::symmetric(6, 3));
 
@@ -621,27 +656,31 @@ impl UltraLogApp {
                                                     ui.label(
                                                         egui::RichText::new("✓")
                                                             .size(font_14)
-                                                            .color(egui::Color32::WHITE),
+                                                            .color(text_color),
                                                     );
                                                     ui.label(
                                                         egui::RichText::new(channel_name)
                                                             .size(font_14)
-                                                            .color(egui::Color32::WHITE),
+                                                            .color(text_color),
                                                     );
                                                 });
                                             })
                                             .response
-                                            .interact(egui::Sense::click())
-                                            .on_hover_text("Click to remove channel");
+                                            .interact(egui::Sense::click_and_drag())
+                                            .on_hover_text(
+                                                "Drag to another plot, or click to remove channel",
+                                            );
+
+                                        response.dnd_set_drag_payload(PlotChannelDragPayload {
+                                            channel_idx: *channel_idx,
+                                        });
 
                                         if response.clicked() {
                                             channel_to_remove = Some(*channel_idx);
                                         }
 
                                         if response.hovered() {
-                                            child_ui
-                                                .ctx()
-                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
+                                            child_ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
                                         }
                                     }
                                 }
@@ -802,6 +841,10 @@ impl UltraLogApp {
 
         if let Some((file_idx, channel_idx, plot_id)) = channel_to_add {
             self.add_channel_to_plot(file_idx, channel_idx, plot_id);
+        }
+
+        if let Some((channel_idx, plot_id)) = channel_to_move {
+            self.move_channel_to_plot(channel_idx, plot_id);
         }
 
         if let Some(plot_id) = plot_to_delete {

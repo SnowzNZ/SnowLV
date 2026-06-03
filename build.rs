@@ -98,7 +98,7 @@ fn main() {
 
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icons/windows.ico")
-            .set("ProductName", "UltraLog")
+            .set("ProductName", "SnowLV")
             .set("FileDescription", "High-performance ECU log viewer")
             .set("LegalCopyright", "Copyright (c) 2026 Cole Gentry");
 

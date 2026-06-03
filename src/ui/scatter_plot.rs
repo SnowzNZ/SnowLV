@@ -6,7 +6,7 @@
 use eframe::egui;
 use rust_i18n::t;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::normalize::{normalize_channel_name_with_custom, sort_channels_by_priority};
 use crate::state::{ScatterPlotConfig, SelectedHeatmapPoint};
 
@@ -38,7 +38,7 @@ const LEGEND_HEIGHT: f32 = 35.0;
 /// Crosshair color
 const CROSSHAIR_COLOR: egui::Color32 = egui::Color32::from_rgb(255, 255, 0); // Yellow
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the scatter plot view with two side-by-side plots
     pub fn render_scatter_plot_view(&mut self, ui: &mut egui::Ui) {
         // Check if we have an active tab with valid file
@@ -52,10 +52,6 @@ impl UltraLogApp {
             });
             return;
         }
-
-        // Render the tab bar first (same as log viewer)
-        self.render_tab_bar(ui);
-        ui.add_space(10.0);
 
         // Get available size for layout
         let available_width = ui.available_width();

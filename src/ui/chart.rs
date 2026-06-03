@@ -4,11 +4,11 @@ use eframe::egui;
 use egui_plot::{Line, Plot, PlotBounds, PlotPoints, VLine};
 use rust_i18n::t;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::normalize::normalize_channel_name_with_custom;
 use crate::state::{
-    PlotArea, SelectedChannel, CHART_COLORS, COLORBLIND_COLORS, MAX_CHART_POINTS, MIN_PLOT_HEIGHT,
-    PLOT_RESIZE_HANDLE_HEIGHT,
+    PlotArea, PlotChannelDragPayload, SelectedChannel, COLORBLIND_COLORS, MAX_CHART_POINTS,
+    MIN_PLOT_HEIGHT, PLOT_RESIZE_HANDLE_HEIGHT,
 };
 
 /// Sensitivity multiplier for scroll-to-zoom (higher = faster zoom per scroll tick).
@@ -19,7 +19,263 @@ const SCROLL_ZOOM_SENSITIVITY: f64 = 0.003;
 /// This is intentionally very small so users can zoom in as far as needed.
 const MIN_ZOOM_WINDOW_SECONDS: f64 = 1e-6;
 
-impl UltraLogApp {
+/// Synthetic plot area id used for the shared X viewport in stacked mode.
+const STACKED_SHARED_X_BOUNDS_ID: usize = usize::MAX;
+
+type ChartValueItems = Vec<(String, egui::Color32)>;
+
+fn chart_scroll_delta_y(ui: &egui::Ui) -> f64 {
+    ui.input(|i| {
+        let smooth = i.smooth_scroll_delta.y as f64;
+        let raw = i
+            .raw
+            .events
+            .iter()
+            .filter_map(|event| {
+                if let egui::Event::MouseWheel {
+                    unit,
+                    delta,
+                    modifiers,
+                    ..
+                } = event
+                {
+                    if modifiers.command {
+                        return None;
+                    }
+                    let scale = match unit {
+                        egui::MouseWheelUnit::Point => 1.0,
+                        egui::MouseWheelUnit::Line => 50.0,
+                        egui::MouseWheelUnit::Page => 400.0,
+                    };
+                    Some(delta.y as f64 * scale)
+                } else {
+                    None
+                }
+            })
+            .sum::<f64>();
+        if smooth.abs() >= raw.abs() {
+            smooth
+        } else {
+            raw
+        }
+    })
+}
+
+fn clamp_chart_x_bounds(mut x_min: f64, mut x_max: f64, min_t: f64, max_t: f64) -> (f64, f64) {
+    let data_width = (max_t - min_t).max(MIN_ZOOM_WINDOW_SECONDS);
+    let width = (x_max - x_min).clamp(MIN_ZOOM_WINDOW_SECONDS, data_width);
+
+    if width >= data_width {
+        return (min_t, max_t);
+    }
+
+    if x_min < min_t {
+        x_min = min_t;
+        x_max = min_t + width;
+    }
+    if x_max > max_t {
+        x_max = max_t;
+        x_min = max_t - width;
+    }
+
+    (x_min, x_max)
+}
+
+fn pan_chart_x_bounds(
+    x_bounds: (f64, f64),
+    time_range: Option<(f64, f64)>,
+    rect_width: f32,
+    pointer_delta_x: f32,
+) -> (f64, f64) {
+    let Some((min_t, max_t)) = time_range else {
+        return x_bounds;
+    };
+    if rect_width <= 1.0 || pointer_delta_x.abs() <= f32::EPSILON {
+        return x_bounds;
+    }
+
+    let (x_min, x_max) = x_bounds;
+    let seconds_per_pixel = (x_max - x_min) / rect_width as f64;
+    let shift = -(pointer_delta_x as f64) * seconds_per_pixel;
+    clamp_chart_x_bounds(x_min + shift, x_max + shift, min_t, max_t)
+}
+
+fn zoom_chart_x_bounds(
+    x_bounds: (f64, f64),
+    time_range: Option<(f64, f64)>,
+    center: f64,
+    zoom_factor: f64,
+) -> (f64, f64) {
+    let Some((min_t, max_t)) = time_range else {
+        return x_bounds;
+    };
+    if (zoom_factor - 1.0).abs() <= f64::EPSILON {
+        return x_bounds;
+    }
+
+    let (x_min, x_max) = x_bounds;
+    let width = x_max - x_min;
+    let new_width = (width * zoom_factor).clamp(
+        MIN_ZOOM_WINDOW_SECONDS,
+        (max_t - min_t).max(MIN_ZOOM_WINDOW_SECONDS),
+    );
+    let center = center.clamp(x_min, x_max);
+    let ratio = if width > 0.0 {
+        (center - x_min) / width
+    } else {
+        0.5
+    };
+
+    clamp_chart_x_bounds(
+        center - new_width * ratio,
+        center + new_width * (1.0 - ratio),
+        min_t,
+        max_t,
+    )
+}
+
+fn initial_chart_x_bounds(
+    time_range: Option<(f64, f64)>,
+    cursor_time: Option<f64>,
+    cursor_tracking: bool,
+    chart_panned: bool,
+    view_window: f64,
+    chart_interacted: bool,
+    initial_view_seconds: f64,
+) -> Option<(f64, f64)> {
+    let (min_t, max_t) = time_range?;
+    if max_t <= min_t {
+        return None;
+    }
+
+    let data_width = max_t - min_t;
+    if cursor_tracking && !chart_panned {
+        if let Some(cursor) = cursor_time {
+            let window = view_window.min(data_width).max(MIN_ZOOM_WINDOW_SECONDS);
+            let half_window = window / 2.0;
+            return Some(clamp_chart_x_bounds(
+                cursor - half_window,
+                cursor + half_window,
+                min_t,
+                max_t,
+            ));
+        }
+    }
+
+    if !chart_interacted && data_width > initial_view_seconds {
+        let window = initial_view_seconds
+            .min(data_width)
+            .max(MIN_ZOOM_WINDOW_SECONDS);
+        if let Some(cursor) = cursor_time {
+            let half_window = window / 2.0;
+            Some(clamp_chart_x_bounds(
+                cursor - half_window,
+                cursor + half_window,
+                min_t,
+                max_t,
+            ))
+        } else {
+            Some((min_t, min_t + window))
+        }
+    } else {
+        Some((min_t, max_t))
+    }
+}
+
+fn apply_chart_input_to_bounds(
+    ui: &egui::Ui,
+    x_bounds: (f64, f64),
+    time_range: Option<(f64, f64)>,
+    scroll_delta_y: f64,
+) -> ((f64, f64), bool, bool) {
+    let rect = ui.max_rect();
+    let pointer_pos = ui.input(|i| i.pointer.latest_pos());
+    let press_origin = ui.input(|i| i.pointer.press_origin());
+    let pointer_in_rect = pointer_pos.is_some_and(|pos| rect.contains(pos));
+    let drag_started_in_rect = press_origin.is_some_and(|pos| rect.contains(pos));
+
+    let mut bounds = x_bounds;
+    let mut panned = false;
+    let mut zoomed = false;
+
+    if drag_started_in_rect && ui.input(|i| i.pointer.primary_down()) {
+        let delta_x = ui.input(|i| i.pointer.delta().x);
+        let next_bounds = pan_chart_x_bounds(bounds, time_range, rect.width(), delta_x);
+        panned = next_bounds != bounds;
+        bounds = next_bounds;
+    }
+
+    if pointer_in_rect {
+        let center = pointer_pos
+            .filter(|_| rect.width() > 1.0)
+            .map(|pos| {
+                let ratio = ((pos.x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
+                bounds.0 + ratio * (bounds.1 - bounds.0)
+            })
+            .unwrap_or((bounds.0 + bounds.1) / 2.0);
+
+        if scroll_delta_y.abs() > 0.1 {
+            let zoom_factor = (1.0 - scroll_delta_y * SCROLL_ZOOM_SENSITIVITY).clamp(0.8, 1.25);
+            let next_bounds = zoom_chart_x_bounds(bounds, time_range, center, zoom_factor);
+            zoomed |= next_bounds != bounds;
+            bounds = next_bounds;
+        }
+
+        let zoom_delta = ui.input(|i| i.zoom_delta()) as f64;
+        if zoom_delta != 1.0 {
+            let next_bounds = zoom_chart_x_bounds(bounds, time_range, center, 1.0 / zoom_delta);
+            zoomed |= next_bounds != bounds;
+            bounds = next_bounds;
+        }
+    }
+
+    (bounds, panned, zoomed)
+}
+
+fn render_chart_value_view(
+    ctx: &egui::Context,
+    id: egui::Id,
+    pos: egui::Pos2,
+    pivot: egui::Align2,
+    values: &[(String, egui::Color32)],
+) {
+    if values.is_empty() {
+        return;
+    }
+
+    egui::Area::new(id)
+        .order(egui::Order::Foreground)
+        .interactable(false)
+        .fixed_pos(pos)
+        .pivot(pivot)
+        .show(ctx, |ui| {
+            egui::Frame::NONE
+                .fill(egui::Color32::from_rgba_unmultiplied(20, 20, 20, 230))
+                .stroke(egui::Stroke::new(1.0, egui::Color32::from_gray(70)))
+                .corner_radius(4)
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 3.0);
+                    for (label, color) in values {
+                        ui.horizontal(|ui| {
+                            let (rect, _) =
+                                ui.allocate_exact_size(egui::vec2(14.0, 8.0), egui::Sense::hover());
+                            ui.painter().line_segment(
+                                [rect.left_center(), rect.right_center()],
+                                egui::Stroke::new(2.0, *color),
+                            );
+                            ui.label(
+                                egui::RichText::new(label)
+                                    .color(egui::Color32::LIGHT_GRAY)
+                                    .size(12.0),
+                            );
+                        });
+                    }
+                });
+        });
+}
+
+impl SnowLVApp {
     /// Render the main chart with cached downsampled data
     pub fn render_chart(&mut self, ui: &mut egui::Ui) {
         // Check if stacked mode is enabled
@@ -35,126 +291,129 @@ impl UltraLogApp {
         }
     }
 
-    /// Translate pinch / cmd+wheel (and scroll if `scroll_to_zoom` is on) into
-    /// changes of `current_view_window` while in cursor-tracking mode. Without
-    /// this, the cursor-tracking branch in the plot closure forces bounds to a
-    /// fixed-width window every frame and any zoom is immediately overridden.
-    /// The persistent `view_window_seconds` (Settings slider) is intentionally
-    /// not touched here — that's the user-set default; the slider write-path
-    /// resets `current_view_window` back to it on every change.
-    fn apply_zoom_to_view_window_if_tracking(&mut self, ui: &egui::Ui) {
-        if !self.cursor_tracking {
-            return;
-        }
-        // Don't react to scroll/pinch happening over other UI (e.g. the
-        // Settings panel) — `ui.input` is global, so without this guard a
-        // wheel event over the side panel would still resize the cursor
-        // tracking window. `min_rect()` is empty before any chart content
-        // is drawn, so we use `max_rect()` (the full available area of the
-        // central panel) instead.
-        if !ui.rect_contains_pointer(ui.max_rect()) {
-            return;
-        }
-        let Some((min_t, max_t)) = self.get_time_range() else {
-            return;
-        };
-        let zoom_delta = ui.input(|i| i.zoom_delta()) as f64;
-        let mut new_window = self.get_current_view_window();
-        if zoom_delta != 1.0 {
-            new_window /= zoom_delta;
-        }
-        if self.scroll_to_zoom {
-            let scroll_y = ui.input(|i| i.smooth_scroll_delta.y) as f64;
-            if scroll_y.abs() > 0.1 {
-                let factor = (1.0 - scroll_y * SCROLL_ZOOM_SENSITIVITY).clamp(0.8, 1.25);
-                new_window *= factor;
-            }
-        }
-        let max_window = (max_t - min_t).max(MIN_ZOOM_WINDOW_SECONDS);
-        self.set_current_view_window(new_window.clamp(MIN_ZOOM_WINDOW_SECONDS, max_window));
-    }
-
     /// Render single-plot mode chart (original implementation)
     fn render_chart_single_mode(&mut self, ui: &mut egui::Ui) {
-        self.apply_zoom_to_view_window_if_tracking(ui);
-
-        // Get selected channels from active tab
-        let selected_channels = self.get_selected_channels().to_vec();
+        let total_selected = self.get_selected_channels().len();
+        // Get visible selected channels from active tab
+        let selected_channels: Vec<SelectedChannel> = self
+            .get_selected_channels()
+            .iter()
+            .filter(|channel| !channel.hidden)
+            .cloned()
+            .collect();
 
         if selected_channels.is_empty() {
             ui.centered_and_justified(|ui| {
                 ui.label(
-                    egui::RichText::new(t!("chart.select_channels"))
-                        .size(self.scaled_font(20.0))
-                        .color(egui::Color32::GRAY),
+                    egui::RichText::new(if total_selected == 0 {
+                        t!("chart.select_channels").to_string()
+                    } else {
+                        "All selected channels are hidden".to_string()
+                    })
+                    .size(self.scaled_font(20.0))
+                    .color(egui::Color32::GRAY),
                 );
             });
             return;
         }
 
+        let cursor_time = self.get_cursor_time();
+        let cursor_tracking = self.cursor_tracking;
+        let chart_panned = self.get_chart_panned();
+        let view_window = self.get_current_view_window();
+        let time_range = self.get_time_range();
+        let chart_interacted = self.get_chart_interacted();
+        let initial_view_seconds = self.initial_view_seconds;
+        let scroll_delta_y = chart_scroll_delta_y(ui);
+        let mut viewport = self
+            .active_tab
+            .and_then(|tab_idx| self.chart_last_x_bounds.get(&(tab_idx, 0)).copied())
+            .or_else(|| {
+                initial_chart_x_bounds(
+                    time_range,
+                    cursor_time,
+                    cursor_tracking,
+                    chart_panned,
+                    view_window,
+                    chart_interacted,
+                    initial_view_seconds,
+                )
+            });
+        let mut input_panned = false;
+        let mut input_zoomed = false;
+        if let Some(bounds) = viewport {
+            let (next_bounds, panned, zoomed) =
+                apply_chart_input_to_bounds(ui, bounds, time_range, scroll_delta_y);
+            viewport = Some(next_bounds);
+            input_panned = panned;
+            input_zoomed = zoomed;
+        }
+
         // Compute downsampled + normalized data sliced to the current viewport.
         // Detail scales with zoom level: a 1% viewport gets MAX_CHART_POINTS
         // over that 1%, not over the whole log.
-        let viewport = self
-            .active_tab
-            .and_then(|tab_idx| self.chart_last_x_bounds.get(&(tab_idx, 0)).copied());
         let chart_points: Vec<Option<Vec<[f64; 2]>>> = selected_channels
             .iter()
             .map(|selected| {
                 self.compute_viewport_points(selected.file_index, selected.channel_index, viewport)
             })
             .collect();
-
         let use_normalization = self.field_normalization;
         let custom_mappings = &self.custom_normalizations;
 
         // Prepare data for the plot closure (can't borrow self mutably inside)
         let chart_points = &chart_points;
         let files = &self.files;
-        let cursor_time = self.get_cursor_time();
-        let cursor_tracking = self.cursor_tracking;
-        let view_window = self.get_current_view_window();
-        let time_range = self.get_time_range();
         let color_blind_mode = self.color_blind_mode;
-        let chart_interacted = self.get_chart_interacted();
-        let chart_panned = self.get_chart_panned();
-        let initial_view_seconds = self.initial_view_seconds;
+        let theme = self.theme();
+        let chart_palette = if color_blind_mode {
+            COLORBLIND_COLORS
+        } else {
+            theme.chart.as_slice()
+        };
+        let playhead_color = theme.color(theme.playhead);
         let jump_to_time = self.get_jump_to_time();
-        let scroll_to_zoom = self.scroll_to_zoom;
+        let values_follow_cursor = self.values_follow_cursor;
         let show_grid = self.show_grid;
         let grid_color = grid_color_with_opacity(ui, self.grid_opacity);
 
-        // Read scroll input before plot consumes it (for scroll-to-zoom mode)
-        let scroll_delta_y = if scroll_to_zoom && !cursor_tracking {
-            ui.input(|i| i.smooth_scroll_delta.y)
-        } else {
-            0.0
-        };
-
-        let zooming =
-            ui.input(|i| i.zoom_delta() != 1.0) || (scroll_to_zoom && scroll_delta_y.abs() > 0.1);
+        let zooming = input_zoomed || ui.input(|i| i.zoom_delta() != 1.0);
 
         // Fixed Y bounds for normalized data (0-1 with small padding)
         const Y_MIN: f64 = -0.05;
         const Y_MAX: f64 = 1.05;
+        let default_x_bounds = viewport
+            .or(time_range)
+            .filter(|(min, max)| max > min)
+            .unwrap_or((0.0, 1.0));
 
-        // Build the plot - X-axis zoom only, Y fixed
-        // When scroll_to_zoom is enabled, disable scroll-to-pan so we handle scroll as zoom
+        // Build the plot - X-axis drag pans, wheel is handled below as zoom.
         let plot = Plot::new("log_chart")
-            .legend(egui_plot::Legend::default())
             .y_axis_label("") // Hide Y axis label since values are normalized
             .show_axes([true, false]) // Show X axis (time), hide Y axis (normalized 0-1)
+            .legend(egui_plot::Legend::default())
             .show_grid([show_grid, show_grid])
             .grid_color(grid_color)
-            .allow_zoom([true, false]) // Only allow X-axis zoom
-            .allow_drag([self.drag_to_pan, false]) // Allow X-axis drag when enabled
-            .allow_scroll([!cursor_tracking && !scroll_to_zoom, false]); // Disable scroll-pan when scroll-to-zoom enabled
+            .default_x_bounds(default_x_bounds.0, default_x_bounds.1)
+            .default_y_bounds(Y_MIN, Y_MAX)
+            .auto_bounds([false, false])
+            .allow_zoom([false, false])
+            .allow_axis_zoom_drag([false, false])
+            .allow_boxed_zoom(false)
+            .allow_double_click_reset(false)
+            .allow_drag([false, false])
+            .allow_scroll([false, false]);
 
         let response = plot.show(ui, |plot_ui| {
             // Get current bounds
             let current_bounds = plot_ui.plot_bounds();
             let mut x_min = current_bounds.min()[0];
             let mut x_max = current_bounds.max()[0];
+
+            if let Some((viewport_min, viewport_max)) = viewport {
+                x_min = viewport_min;
+                x_max = viewport_max;
+            }
 
             // Handle jump-to-time request (from min/max jump buttons)
             if let (Some(jump_time), Some((min_t, max_t))) = (jump_to_time, time_range) {
@@ -171,13 +430,23 @@ impl UltraLogApp {
                         x_min = (max_t - current_width).max(min_t);
                     }
                 }
-            } else if cursor_tracking && !chart_panned && !zooming && !chart_interacted {
-                // In cursor tracking mode, center on cursor only before the user has
-                // interacted with the chart.
+            } else if cursor_tracking && !chart_panned && !zooming {
+                // In cursor tracking mode, keep a fixed-width window and only pan it.
                 if let (Some(cursor), Some((min_t, max_t))) = (cursor_time, time_range) {
-                    let half_window = view_window / 2.0;
-                    x_min = (cursor - half_window).max(min_t);
-                    x_max = (cursor + half_window).min(max_t);
+                    let data_width = max_t - min_t;
+                    let window = view_window.min(data_width).max(MIN_ZOOM_WINDOW_SECONDS);
+                    let half_window = window / 2.0;
+                    x_min = cursor - half_window;
+                    x_max = cursor + half_window;
+
+                    if x_min < min_t {
+                        x_min = min_t;
+                        x_max = min_t + window;
+                    }
+                    if x_max > max_t {
+                        x_max = max_t;
+                        x_min = max_t - window;
+                    }
                 }
             } else if let Some((min_t, max_t)) = time_range {
                 let data_width = max_t - min_t;
@@ -222,51 +491,24 @@ impl UltraLogApp {
                 }
             }
 
-            // Apply scroll-to-zoom: use scroll delta to zoom centered on pointer
-            if scroll_to_zoom && scroll_delta_y.abs() > 0.1 {
-                if let Some((min_t, max_t)) = time_range {
-                    let zoom_factor =
-                        (1.0 - scroll_delta_y as f64 * SCROLL_ZOOM_SENSITIVITY).clamp(0.8, 1.25);
-                    let width = x_max - x_min;
-                    let new_width =
-                        (width * zoom_factor).clamp(MIN_ZOOM_WINDOW_SECONDS, max_t - min_t);
-
-                    // Zoom around pointer position if hovering, otherwise center
-                    let center = plot_ui
-                        .pointer_coordinate()
-                        .map(|p| p.x.clamp(x_min, x_max))
-                        .unwrap_or((x_min + x_max) / 2.0);
-                    let ratio = if width > 0.0 {
-                        (center - x_min) / width
-                    } else {
-                        0.5
-                    };
-
-                    x_min = center - new_width * ratio;
-                    x_max = center + new_width * (1.0 - ratio);
-
-                    // Clamp to data range
-                    if x_min < min_t {
-                        x_min = min_t;
-                        x_max = (min_t + new_width).min(max_t);
-                    }
-                    if x_max > max_t {
-                        x_max = max_t;
-                        x_min = (max_t - new_width).max(min_t);
-                    }
-                }
-            }
-
             // Always enforce bounds: X clamped to data, Y fixed to normalized range
             let new_bounds = PlotBounds::from_min_max([x_min, Y_MIN], [x_max, Y_MAX]);
             plot_ui.set_plot_bounds(new_bounds);
 
-            let hover_time = plot_ui.pointer_coordinate().map(|pos| pos.x);
-            let record = hover_time
-                .and_then(|t| self.find_record_at_time(t))
-                .or(self.get_cursor_record());
+            let pointer_plot_pos = plot_ui.pointer_coordinate();
+            let pointer_screen_pos = plot_ui
+                .ctx()
+                .input(|i| i.pointer.latest_pos())
+                .filter(|pos| plot_ui.transform().frame().contains(*pos));
+            let hover_time = pointer_plot_pos.map(|pos| pos.x);
+            let mouse_record = pointer_screen_pos
+                .and_then(|_| hover_time.and_then(|t| self.find_record_at_time(t)));
+            let record = mouse_record.or(self.get_cursor_record());
 
-            let legend_names: Vec<String> = selected_channels
+            let mut value_view_items: ChartValueItems = Vec::new();
+            let palette = chart_palette;
+
+            let line_names: Vec<String> = selected_channels
                 .iter()
                 .map(|selected| {
                     let original_name = selected.channel.name();
@@ -284,11 +526,20 @@ impl UltraLogApp {
                             let source_unit = selected.channel.unit();
                             let (converted_value, display_unit) =
                                 self.unit_preferences.convert_value(value, source_unit);
-                            if display_unit.is_empty() {
+                            let value_label = if display_unit.is_empty() {
                                 format!("{}: {:.2}", base_name, converted_value)
                             } else {
                                 format!("{}: {:.2} {}", base_name, converted_value, display_unit)
+                            };
+
+                            if values_follow_cursor && mouse_record.is_some() {
+                                let color = palette[selected.color_index % palette.len()];
+                                value_view_items.push((
+                                    value_label.clone(),
+                                    egui::Color32::from_rgb(color[0], color[1], color[2]),
+                                ));
                             }
+                            value_label
                         } else {
                             base_name
                         }
@@ -298,7 +549,7 @@ impl UltraLogApp {
                 })
                 .collect();
 
-            // Draw channel data lines with values in legend
+            // Draw channel data lines
             for (i, selected) in selected_channels.iter().enumerate() {
                 if selected.file_index >= files.len() {
                     continue;
@@ -306,14 +557,9 @@ impl UltraLogApp {
 
                 if let Some(points) = chart_points.get(i).and_then(|p| p.as_ref()) {
                     let plot_points: PlotPoints = points.iter().copied().collect();
-                    let palette = if color_blind_mode {
-                        COLORBLIND_COLORS
-                    } else {
-                        CHART_COLORS
-                    };
                     let color = palette[selected.color_index % palette.len()];
 
-                    let name = &legend_names[i];
+                    let name = &line_names[i];
 
                     plot_ui.line(
                         Line::new(name.clone(), plot_points)
@@ -326,37 +572,71 @@ impl UltraLogApp {
             // Draw vertical cursor line
             if let Some(time) = cursor_time {
                 plot_ui.vline(
-                    VLine::new("Cursor", time)
-                        .color(egui::Color32::from_rgb(0, 255, 255)) // Cyan cursor
+                    VLine::new("Playhead", time)
+                        .color(playhead_color)
                         .width(2.0),
                 );
             }
 
-            // Return pointer position if hovering for click detection
-            plot_ui.pointer_coordinate()
+            if !value_view_items.is_empty() {
+                let frame = *plot_ui.transform().frame();
+                if values_follow_cursor {
+                    if let Some(pointer_screen_pos) = pointer_screen_pos {
+                        let place_right = pointer_screen_pos.x + 180.0 < frame.right();
+                        render_chart_value_view(
+                            plot_ui.ctx(),
+                            egui::Id::new("log_chart_mouse_value_view"),
+                            pointer_screen_pos
+                                + egui::vec2(if place_right { 14.0 } else { -14.0 }, 14.0),
+                            if place_right {
+                                egui::Align2::LEFT_TOP
+                            } else {
+                                egui::Align2::RIGHT_TOP
+                            },
+                            &value_view_items,
+                        );
+                    }
+                }
+            }
+
+            // Return pointer position for clicks and the exact bounds we just set.
+            (plot_ui.pointer_coordinate(), (x_min, x_max))
         });
 
-        // Remember the X-axis bounds we just rendered so the next frame can
-        // slice raw data to this viewport before LTTB-downsampling.
-        let final_bounds = response.transform.bounds();
+        let x_bounds = response.inner.1;
+        let viewport_changed = input_panned || input_zoomed;
+
+        // Remember the X-axis bounds so the next frame can render and
+        // downsample from the same viewport.
         if let Some(tab_idx) = self.active_tab {
-            self.chart_last_x_bounds
-                .insert((tab_idx, 0), (final_bounds.min()[0], final_bounds.max()[0]));
+            self.chart_last_x_bounds.insert((tab_idx, 0), x_bounds);
         }
 
         // Detect user interaction with chart (drag, zoom, scroll)
         // This marks the chart as "interacted" so we stop using the initial zoomed view
+        let hovered_scroll_zoom = input_zoomed;
         let zooming = ui.input(|i| i.zoom_delta() != 1.0)
             || ui.input(|i| i.smooth_scroll_delta.x != 0.0)
-            || (scroll_to_zoom && scroll_delta_y.abs() > 0.1);
+            || hovered_scroll_zoom;
 
-        if response.response.dragged() || response.response.drag_started() || zooming {
+        if response.response.dragged()
+            || response.response.drag_started()
+            || zooming
+            || viewport_changed
+        {
             self.set_chart_interacted(true);
         }
-        if response.response.dragged() || response.response.drag_started() {
+        if input_panned
+            || response.response.dragged()
+            || response.response.drag_started()
+            || (input_zoomed && cursor_tracking)
+        {
             self.set_chart_panned(true);
-        } else if zooming {
+        } else if (zooming || input_zoomed) && !cursor_tracking {
             self.set_chart_panned(false);
+        }
+        if viewport_changed {
+            ui.ctx().request_repaint();
         }
 
         // Clear jump-to-time request after it's been processed
@@ -368,7 +648,7 @@ impl UltraLogApp {
 
         // Handle click on chart to set cursor position
         if response.response.clicked() {
-            if let Some(pos) = response.inner {
+            if let Some(pos) = response.inner.0 {
                 let clicked_time = pos.x;
                 // Clamp to time range
                 if let Some((min, max)) = self.get_time_range() {
@@ -389,8 +669,6 @@ impl UltraLogApp {
 
     /// Render stacked plot areas
     fn render_chart_stacked_mode(&mut self, ui: &mut egui::Ui) {
-        self.apply_zoom_to_view_window_if_tracking(ui);
-
         let Some(tab_idx) = self.active_tab else {
             ui.centered_and_justified(|ui| {
                 ui.label(
@@ -453,9 +731,10 @@ impl UltraLogApp {
                         .channel_indices
                         .iter()
                         .filter_map(|&idx| self.tabs[tab_idx].selected_channels.get(idx).cloned())
+                        .filter(|channel| !channel.hidden)
                         .collect();
 
-                    if plot_channels.is_empty() {
+                    if plot_area.channel_indices.is_empty() {
                         // Empty plot area with drop zone
                         let (rect, response) = ui.allocate_exact_size(
                             egui::vec2(ui.available_width(), plot_height),
@@ -463,20 +742,34 @@ impl UltraLogApp {
                         );
 
                         // Check for dropped channel
-                        if let Some(payload) = response.dnd_release_payload::<(usize, usize)>() {
-                            if plot_area.has_capacity() {
-                                let (dropped_file_idx, dropped_channel_idx) = *payload;
-                                self.add_channel_to_plot(
-                                    dropped_file_idx,
-                                    dropped_channel_idx,
-                                    plot_area.id,
-                                );
+                        if egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(ui.ctx()) {
+                            if let Some(payload) = response.dnd_release_payload::<(usize, usize)>()
+                            {
+                                if plot_area.has_capacity() {
+                                    let (dropped_file_idx, dropped_channel_idx) = *payload;
+                                    self.add_channel_to_plot(
+                                        dropped_file_idx,
+                                        dropped_channel_idx,
+                                        plot_area.id,
+                                    );
+                                }
+                            }
+                        } else if egui::DragAndDrop::has_payload_of_type::<PlotChannelDragPayload>(
+                            ui.ctx(),
+                        ) {
+                            if let Some(payload) =
+                                response.dnd_release_payload::<PlotChannelDragPayload>()
+                            {
+                                self.move_channel_to_plot(payload.channel_idx, plot_area.id);
                             }
                         }
 
                         // Highlight if hovering with drag payload
                         let is_drop_target =
-                            response.dnd_hover_payload::<(usize, usize)>().is_some();
+                            response.dnd_hover_payload::<(usize, usize)>().is_some()
+                                || response
+                                    .dnd_hover_payload::<PlotChannelDragPayload>()
+                                    .is_some();
                         let stroke_color = if is_drop_target && plot_area.has_capacity() {
                             egui::Color32::from_rgb(71, 108, 155)
                         } else {
@@ -506,6 +799,59 @@ impl UltraLogApp {
                                 } else {
                                     egui::Color32::GRAY
                                 }),
+                            ),
+                        );
+                    } else if plot_channels.is_empty() {
+                        let (rect, response) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), plot_height),
+                            egui::Sense::hover(),
+                        );
+
+                        if egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(ui.ctx()) {
+                            if let Some(payload) = response.dnd_release_payload::<(usize, usize)>()
+                            {
+                                if plot_area.has_capacity() {
+                                    let (dropped_file_idx, dropped_channel_idx) = *payload;
+                                    self.add_channel_to_plot(
+                                        dropped_file_idx,
+                                        dropped_channel_idx,
+                                        plot_area.id,
+                                    );
+                                }
+                            }
+                        } else if egui::DragAndDrop::has_payload_of_type::<PlotChannelDragPayload>(
+                            ui.ctx(),
+                        ) {
+                            if let Some(payload) =
+                                response.dnd_release_payload::<PlotChannelDragPayload>()
+                            {
+                                self.move_channel_to_plot(payload.channel_idx, plot_area.id);
+                            }
+                        }
+
+                        let is_drop_target =
+                            response.dnd_hover_payload::<(usize, usize)>().is_some()
+                                || response
+                                    .dnd_hover_payload::<PlotChannelDragPayload>()
+                                    .is_some();
+                        let stroke_color = if is_drop_target && plot_area.has_capacity() {
+                            egui::Color32::from_rgb(71, 108, 155)
+                        } else {
+                            egui::Color32::from_gray(80)
+                        };
+
+                        ui.painter().rect_stroke(
+                            rect,
+                            egui::CornerRadius::same(4),
+                            egui::Stroke::new(if is_drop_target { 2.0 } else { 1.0 }, stroke_color),
+                            egui::StrokeKind::Outside,
+                        );
+                        ui.put(
+                            rect,
+                            egui::Label::new(
+                                egui::RichText::new("All channels in this plot are hidden")
+                                    .italics()
+                                    .color(egui::Color32::GRAY),
                             ),
                         );
                     } else {
@@ -540,34 +886,70 @@ impl UltraLogApp {
         plot_area_id: usize,
         height: f32,
     ) {
+        let cursor_time = self.get_cursor_time();
+        let cursor_tracking = self.cursor_tracking;
+        let chart_panned = self.get_chart_panned();
+        let view_window = self.get_current_view_window();
+        let time_range = self.get_time_range();
+        let chart_interacted = self.get_chart_interacted();
+        let initial_view_seconds = self.initial_view_seconds;
+        let scroll_delta_y = chart_scroll_delta_y(ui);
+
         // Compute viewport-aware downsampled + normalized points for this plot area.
-        let viewport = self.active_tab.and_then(|tab_idx| {
+        let shared_viewport = self.active_tab.and_then(|tab_idx| {
             self.chart_last_x_bounds
-                .get(&(tab_idx, plot_area_id))
+                .get(&(tab_idx, STACKED_SHARED_X_BOUNDS_ID))
                 .copied()
         });
+        let mut viewport = shared_viewport
+            .or_else(|| {
+                self.active_tab.and_then(|tab_idx| {
+                    self.chart_last_x_bounds
+                        .get(&(tab_idx, plot_area_id))
+                        .copied()
+                })
+            })
+            .or_else(|| {
+                initial_chart_x_bounds(
+                    time_range,
+                    cursor_time,
+                    cursor_tracking,
+                    chart_panned,
+                    view_window,
+                    chart_interacted,
+                    initial_view_seconds,
+                )
+            });
+        let mut input_panned = false;
+        let mut input_zoomed = false;
+        if let Some(bounds) = viewport {
+            let (next_bounds, panned, zoomed) =
+                apply_chart_input_to_bounds(ui, bounds, time_range, scroll_delta_y);
+            viewport = Some(next_bounds);
+            input_panned = panned;
+            input_zoomed = zoomed;
+        }
         let chart_points: Vec<Option<Vec<[f64; 2]>>> = channels
             .iter()
             .map(|selected| {
                 self.compute_viewport_points(selected.file_index, selected.channel_index, viewport)
             })
             .collect();
-
         // Prepare data for plot
         let use_normalization = self.field_normalization;
         let custom_mappings = &self.custom_normalizations;
         let chart_points = &chart_points;
         let files = &self.files;
-        let cursor_time = self.get_cursor_time();
-        let cursor_tracking = self.cursor_tracking;
-        let view_window = self.get_current_view_window();
-        let time_range = self.get_time_range();
         let color_blind_mode = self.color_blind_mode;
-        let chart_interacted = self.get_chart_interacted();
-        let chart_panned = self.get_chart_panned();
-        let initial_view_seconds = self.initial_view_seconds;
+        let theme = self.theme();
+        let chart_palette = if color_blind_mode {
+            COLORBLIND_COLORS
+        } else {
+            theme.chart.as_slice()
+        };
+        let playhead_color = theme.color(theme.playhead);
         let jump_to_time = self.get_jump_to_time();
-        let scroll_to_zoom = self.scroll_to_zoom;
+        let values_follow_cursor = self.values_follow_cursor;
 
         // Fixed Y bounds
         const Y_MIN: f64 = -0.05;
@@ -576,31 +958,40 @@ impl UltraLogApp {
         let show_grid = self.show_grid;
         let grid_color = grid_color_with_opacity(ui, self.grid_opacity);
 
-        let scroll_delta_y = if scroll_to_zoom && !cursor_tracking {
-            ui.input(|i| i.smooth_scroll_delta.y)
-        } else {
-            0.0
-        };
-        let zooming =
-            ui.input(|i| i.zoom_delta() != 1.0) || (scroll_to_zoom && scroll_delta_y.abs() > 0.1);
+        let zooming = input_zoomed || ui.input(|i| i.zoom_delta() != 1.0);
 
         // Build plot with fixed height
+        let default_x_bounds = viewport
+            .or(time_range)
+            .filter(|(min, max)| max > min)
+            .unwrap_or((0.0, 1.0));
         let plot = Plot::new(format!("plot_{}", plot_area_id))
             .height(height)
-            .legend(egui_plot::Legend::default())
             .y_axis_label("")
             .show_axes([true, false])
+            .legend(egui_plot::Legend::default())
             .show_grid([show_grid, show_grid])
             .grid_color(grid_color)
-            .allow_zoom([true, false])
-            .allow_drag([self.drag_to_pan, false])
-            .allow_scroll([!cursor_tracking, false]);
+            .default_x_bounds(default_x_bounds.0, default_x_bounds.1)
+            .default_y_bounds(Y_MIN, Y_MAX)
+            .auto_bounds([false, false])
+            .allow_zoom([false, false])
+            .allow_axis_zoom_drag([false, false])
+            .allow_boxed_zoom(false)
+            .allow_double_click_reset(false)
+            .allow_drag([false, false])
+            .allow_scroll([false, false]);
 
         let response = plot.show(ui, |plot_ui| {
             // Get current bounds
             let current_bounds = plot_ui.plot_bounds();
             let mut x_min = current_bounds.min()[0];
             let mut x_max = current_bounds.max()[0];
+
+            if let Some((viewport_min, viewport_max)) = viewport {
+                x_min = viewport_min;
+                x_max = viewport_max;
+            }
 
             // Handle jump-to-time request
             if let (Some(jump_time), Some((min_t, max_t))) = (jump_to_time, time_range) {
@@ -615,11 +1006,22 @@ impl UltraLogApp {
                         x_min = (max_t - current_width).max(min_t);
                     }
                 }
-            } else if cursor_tracking && !chart_panned && !zooming && !chart_interacted {
+            } else if cursor_tracking && !chart_panned && !zooming {
                 if let (Some(cursor), Some((min_t, max_t))) = (cursor_time, time_range) {
-                    let half_window = view_window / 2.0;
-                    x_min = (cursor - half_window).max(min_t);
-                    x_max = (cursor + half_window).min(max_t);
+                    let data_width = max_t - min_t;
+                    let window = view_window.min(data_width).max(MIN_ZOOM_WINDOW_SECONDS);
+                    let half_window = window / 2.0;
+                    x_min = cursor - half_window;
+                    x_max = cursor + half_window;
+
+                    if x_min < min_t {
+                        x_min = min_t;
+                        x_max = min_t + window;
+                    }
+                    if x_max > max_t {
+                        x_max = max_t;
+                        x_min = max_t - window;
+                    }
                 }
             } else if let Some((min_t, max_t)) = time_range {
                 let data_width = max_t - min_t;
@@ -663,12 +1065,20 @@ impl UltraLogApp {
             let new_bounds = PlotBounds::from_min_max([x_min, Y_MIN], [x_max, Y_MAX]);
             plot_ui.set_plot_bounds(new_bounds);
 
-            let hover_time = plot_ui.pointer_coordinate().map(|pos| pos.x);
-            let record = hover_time
-                .and_then(|t| self.find_record_at_time(t))
-                .or(self.get_cursor_record());
+            let pointer_plot_pos = plot_ui.pointer_coordinate();
+            let pointer_screen_pos = plot_ui
+                .ctx()
+                .input(|i| i.pointer.latest_pos())
+                .filter(|pos| plot_ui.transform().frame().contains(*pos));
+            let hover_time = pointer_plot_pos.map(|pos| pos.x);
+            let mouse_record = pointer_screen_pos
+                .and_then(|_| hover_time.and_then(|t| self.find_record_at_time(t)));
+            let record = mouse_record.or(self.get_cursor_record());
 
-            let legend_names: Vec<String> = channels
+            let mut value_view_items: ChartValueItems = Vec::new();
+            let palette = chart_palette;
+
+            let line_names: Vec<String> = channels
                 .iter()
                 .map(|selected| {
                     let original_name = selected.channel.name();
@@ -686,11 +1096,20 @@ impl UltraLogApp {
                             let source_unit = selected.channel.unit();
                             let (converted_value, display_unit) =
                                 self.unit_preferences.convert_value(value, source_unit);
-                            if display_unit.is_empty() {
+                            let value_label = if display_unit.is_empty() {
                                 format!("{}: {:.2}", base_name, converted_value)
                             } else {
                                 format!("{}: {:.2} {}", base_name, converted_value, display_unit)
+                            };
+
+                            if values_follow_cursor && mouse_record.is_some() {
+                                let color = palette[selected.color_index % palette.len()];
+                                value_view_items.push((
+                                    value_label.clone(),
+                                    egui::Color32::from_rgb(color[0], color[1], color[2]),
+                                ));
                             }
+                            value_label
                         } else {
                             base_name
                         }
@@ -708,13 +1127,8 @@ impl UltraLogApp {
 
                 if let Some(points) = chart_points.get(i).and_then(|p| p.as_ref()) {
                     let plot_points: PlotPoints = points.iter().copied().collect();
-                    let palette = if color_blind_mode {
-                        COLORBLIND_COLORS
-                    } else {
-                        CHART_COLORS
-                    };
                     let color = palette[selected.color_index % palette.len()];
-                    let name = &legend_names[i];
+                    let name = &line_names[i];
 
                     plot_ui.line(
                         Line::new(name.clone(), plot_points)
@@ -727,35 +1141,71 @@ impl UltraLogApp {
             // Draw cursor line
             if let Some(time) = cursor_time {
                 plot_ui.vline(
-                    VLine::new("Cursor", time)
-                        .color(egui::Color32::from_rgb(0, 255, 255))
+                    VLine::new("Playhead", time)
+                        .color(playhead_color)
                         .width(2.0),
                 );
             }
 
-            plot_ui.pointer_coordinate()
+            if !value_view_items.is_empty() {
+                let frame = *plot_ui.transform().frame();
+                if values_follow_cursor {
+                    if let Some(pointer_screen_pos) = pointer_screen_pos {
+                        let place_right = pointer_screen_pos.x + 180.0 < frame.right();
+                        render_chart_value_view(
+                            plot_ui.ctx(),
+                            egui::Id::new(("plot_mouse_value_view", plot_area_id)),
+                            pointer_screen_pos
+                                + egui::vec2(if place_right { 14.0 } else { -14.0 }, 14.0),
+                            if place_right {
+                                egui::Align2::LEFT_TOP
+                            } else {
+                                egui::Align2::RIGHT_TOP
+                            },
+                            &value_view_items,
+                        );
+                    }
+                }
+            }
+
+            (plot_ui.pointer_coordinate(), (x_min, x_max))
         });
 
-        // Save the bounds we just rendered so the next frame's downsample
-        // matches the visible viewport.
-        let final_bounds = response.transform.bounds();
+        let x_bounds = response.inner.1;
+        let viewport_changed = input_panned || input_zoomed;
+
+        // Save the bounds so the next frame's render and downsample match the
+        // visible viewport.
         if let Some(tab_idx) = self.active_tab {
-            self.chart_last_x_bounds.insert(
-                (tab_idx, plot_area_id),
-                (final_bounds.min()[0], final_bounds.max()[0]),
-            );
+            self.chart_last_x_bounds
+                .insert((tab_idx, plot_area_id), x_bounds);
+            self.chart_last_x_bounds
+                .insert((tab_idx, STACKED_SHARED_X_BOUNDS_ID), x_bounds);
         }
 
         // Detect interaction
-        let zooming =
-            ui.input(|i| i.zoom_delta() != 1.0) || ui.input(|i| i.smooth_scroll_delta.x != 0.0);
-        if response.response.dragged() || response.response.drag_started() || zooming {
+        let hovered_scroll_zoom = input_zoomed;
+        let zooming = ui.input(|i| i.zoom_delta() != 1.0)
+            || ui.input(|i| i.smooth_scroll_delta.x != 0.0)
+            || hovered_scroll_zoom;
+        if response.response.dragged()
+            || response.response.drag_started()
+            || zooming
+            || viewport_changed
+        {
             self.set_chart_interacted(true);
         }
-        if response.response.dragged() || response.response.drag_started() {
+        if input_panned
+            || response.response.dragged()
+            || response.response.drag_started()
+            || (input_zoomed && cursor_tracking)
+        {
             self.set_chart_panned(true);
-        } else if zooming {
+        } else if (zooming || input_zoomed) && !cursor_tracking {
             self.set_chart_panned(false);
+        }
+        if viewport_changed {
+            ui.ctx().request_repaint();
         }
 
         // Clear jump-to-time
@@ -766,7 +1216,7 @@ impl UltraLogApp {
 
         // Handle click
         if response.response.clicked() {
-            if let Some(pos) = response.inner {
+            if let Some(pos) = response.inner.0 {
                 let clicked_time = pos.x;
                 if let Some((min, max)) = self.get_time_range() {
                     self.is_playing = false;
@@ -780,10 +1230,20 @@ impl UltraLogApp {
             }
         }
 
-        // Handle dropped channel on the plot
-        if let Some(payload) = response.response.dnd_release_payload::<(usize, usize)>() {
-            let (dropped_file_idx, dropped_channel_idx) = *payload;
-            self.add_channel_to_plot(dropped_file_idx, dropped_channel_idx, plot_area_id);
+        // Handle dropped channel on the plot. Guard by payload type because
+        // `dnd_release_payload` consumes the active payload even on a type mismatch.
+        if egui::DragAndDrop::has_payload_of_type::<(usize, usize)>(ui.ctx()) {
+            if let Some(payload) = response.response.dnd_release_payload::<(usize, usize)>() {
+                let (dropped_file_idx, dropped_channel_idx) = *payload;
+                self.add_channel_to_plot(dropped_file_idx, dropped_channel_idx, plot_area_id);
+            }
+        } else if egui::DragAndDrop::has_payload_of_type::<PlotChannelDragPayload>(ui.ctx()) {
+            if let Some(payload) = response
+                .response
+                .dnd_release_payload::<PlotChannelDragPayload>()
+            {
+                self.move_channel_to_plot(payload.channel_idx, plot_area_id);
+            }
         }
 
         // Highlight plot when hovering with drag payload
@@ -791,6 +1251,10 @@ impl UltraLogApp {
             .response
             .dnd_hover_payload::<(usize, usize)>()
             .is_some()
+            || response
+                .response
+                .dnd_hover_payload::<PlotChannelDragPayload>()
+                .is_some()
         {
             ui.painter().rect_stroke(
                 response.response.rect,

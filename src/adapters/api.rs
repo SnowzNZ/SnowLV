@@ -12,7 +12,7 @@ use super::types::{AdapterSpec, ProtocolSpec};
 const OECUA_API_BASE: &str = "https://openecualliance.org";
 
 /// User agent for API requests
-const USER_AGENT: &str = concat!("UltraLog/", env!("CARGO_PKG_VERSION"));
+const USER_AGENT: &str = concat!("SnowLV/", env!("CARGO_PKG_VERSION"));
 
 // ============================================================================
 // Error Types

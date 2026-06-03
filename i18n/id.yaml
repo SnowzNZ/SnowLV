@@ -1,4 +1,4 @@
-# Indonesian translations for UltraLog
+# Indonesian translations for SnowLV
 
 # Menu bar (src/ui/menu.rs)
 menu:
@@ -60,8 +60,6 @@ settings:
   cursor_tracking: "Pelacakan Kursor"
   cursor_tracking_desc: "Pertahankan kursor di tengah saat menggulir"
   window: "Jendela:"
-  scroll_to_zoom: "Gulir untuk Zoom"
-  scroll_to_zoom_desc: "Roda mouse memperbesar grafik secara langsung daripada menggeser"
   show_grid: "Tampilkan Kisi"
   show_grid_desc: "Gambar kisi latar belakang bagan"
   grid_opacity: "Opacity:"
@@ -142,7 +140,7 @@ update:
   download_complete: "Unduhan selesai!"
   install_instructions: "Klik Pasang untuk menerapkan pembaruan."
   windows_restart: "Aplikasi akan ditutup dan dimulai ulang secara otomatis."
-  macos_dmg: "DMG akan terbuka - seret UltraLog ke Applications."
+  macos_dmg: "DMG akan terbuka - seret SnowLV ke Applications."
   linux_restart: "Aplikasi akan ditutup dan dimulai ulang secara otomatis."
   install_now: "Pasang Sekarang"
   install_later: "Pasang Nanti"

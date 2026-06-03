@@ -77,7 +77,7 @@ pub mod example_files {
 
 /// Test data generators for synthetic tests
 pub mod synthetic {
-    use ultralog::parsers::types::Value;
+    use snowlv::parsers::types::Value;
 
     /// Create a simple data matrix with linear values
     pub fn linear_data(channels: usize, records: usize) -> Vec<Vec<Value>> {
@@ -113,7 +113,7 @@ pub mod synthetic {
 
 /// Assertion helpers for common test patterns
 pub mod assertions {
-    use ultralog::parsers::types::Log;
+    use snowlv::parsers::types::Log;
 
     /// Assert that a log has valid structure (channels, times, data all present and aligned)
     pub fn assert_valid_log_structure(log: &Log) {

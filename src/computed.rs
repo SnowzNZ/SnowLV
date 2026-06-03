@@ -210,23 +210,23 @@ impl ComputedChannelLibrary {
         self.templates.iter_mut().find(|t| t.id == id)
     }
 
-    /// Get the config directory path for UltraLog
+    /// Get the config directory path for SnowLV
     pub fn get_config_dir() -> Option<PathBuf> {
         #[cfg(target_os = "macos")]
         {
-            dirs::data_dir().map(|p| p.join("UltraLog"))
+            dirs::data_dir().map(|p| p.join("SnowLV"))
         }
         #[cfg(target_os = "windows")]
         {
-            dirs::config_dir().map(|p| p.join("UltraLog"))
+            dirs::config_dir().map(|p| p.join("SnowLV"))
         }
         #[cfg(target_os = "linux")]
         {
-            dirs::config_dir().map(|p| p.join("ultralog"))
+            dirs::config_dir().map(|p| p.join("snowlv"))
         }
         #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
         {
-            dirs::config_dir().map(|p| p.join("ultralog"))
+            dirs::config_dir().map(|p| p.join("snowlv"))
         }
     }
 

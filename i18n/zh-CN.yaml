@@ -1,4 +1,4 @@
-# 简体中文翻译 - UltraLog
+# 简体中文翻译 - SnowLV
 
 # 菜单栏 (src/ui/menu.rs)
 menu:
@@ -60,8 +60,6 @@ settings:
   cursor_tracking: "光标跟踪"
   cursor_tracking_desc: "拖动时保持光标居中"
   window: "窗口:"
-  scroll_to_zoom: "滚动以缩放"
-  scroll_to_zoom_desc: "鼠标滚轮直接缩放图表，而不是平移"
   show_grid: "显示网格"
   show_grid_desc: "绘制图表背景网格"
   grid_opacity: "不透明度:"
@@ -142,7 +140,7 @@ update:
   download_complete: "下载完成!"
   install_instructions: "点击安装以应用更新。"
   windows_restart: "应用程序将自动关闭并重启。"
-  macos_dmg: "DMG 将打开 - 请将 UltraLog 拖到应用程序文件夹。"
+  macos_dmg: "DMG 将打开 - 请将 SnowLV 拖到应用程序文件夹。"
   linux_restart: "应用程序将自动关闭并重启。"
   install_now: "立即安装"
   install_later: "稍后安装"

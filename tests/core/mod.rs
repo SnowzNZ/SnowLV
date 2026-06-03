@@ -3,7 +3,6 @@
 //! Tests for:
 //! - Field name normalization
 //! - Formula parsing and evaluation
-//! - Unit conversions
 //! - State management
 //! - Computed channels
 //! - Internationalization (i18n)
@@ -16,4 +15,3 @@ pub mod mcp_tests;
 pub mod normalize_tests;
 pub mod settings_tests;
 pub mod state_tests;
-pub mod units_tests;

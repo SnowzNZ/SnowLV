@@ -1,18 +1,18 @@
 name: Feature Request
-description: Suggest a new feature or enhancement for UltraLog
+description: Suggest a new feature or enhancement for SnowLV
 title: "[Feature]: "
 labels: ["enhancement"]
 body:
   - type: markdown
     attributes:
       value: |
-        Thanks for suggesting a feature! Your feedback helps make UltraLog better for everyone.
+        Thanks for suggesting a feature! Your feedback helps make SnowLV better for everyone.
 
   - type: dropdown
     id: category
     attributes:
       label: Feature Category
-      description: What area of UltraLog does this feature relate to?
+      description: What area of SnowLV does this feature relate to?
       options:
         - Chart/Plotting
         - Data Analysis
@@ -39,7 +39,7 @@ body:
     attributes:
       label: Proposed Solution
       description: Describe how you'd like this feature to work.
-      placeholder: "It would be great if UltraLog could..."
+      placeholder: "It would be great if SnowLV could..."
     validations:
       required: true
 

@@ -12,9 +12,9 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use ultralog::ipc::commands::{IpcCommand, IpcResponse, ResponseData};
-use ultralog::ipc::IpcServer;
-use ultralog::mcp::UltraLogMcpServer;
+use snowlv::ipc::commands::{IpcCommand, IpcResponse, ResponseData};
+use snowlv::ipc::IpcServer;
+use snowlv::mcp::SnowLVMcpServer;
 
 use rmcp::ServerHandler;
 
@@ -30,10 +30,10 @@ fn find_available_port() -> u16 {
 
 #[test]
 fn test_mcp_server_info() {
-    let server = UltraLogMcpServer::new();
+    let server = SnowLVMcpServer::new();
     let info = server.get_info();
 
-    assert_eq!(info.server_info.name, "ultralog");
+    assert_eq!(info.server_info.name, "snowlv");
     assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
     assert!(info.instructions.is_some());
     assert!(
@@ -44,7 +44,7 @@ fn test_mcp_server_info() {
 
 #[test]
 fn test_mcp_server_instructions_mention_get_state() {
-    let server = UltraLogMcpServer::new();
+    let server = SnowLVMcpServer::new();
     let info = server.get_info();
 
     let instructions = info.instructions.unwrap();
@@ -56,7 +56,7 @@ fn test_mcp_server_instructions_mention_get_state() {
 
 #[test]
 fn test_mcp_server_protocol_version() {
-    let server = UltraLogMcpServer::new();
+    let server = SnowLVMcpServer::new();
     let info = server.get_info();
 
     // Should use a valid MCP protocol version
@@ -277,7 +277,7 @@ fn test_ipc_error_response_for_invalid_json() {
 
 #[test]
 fn test_gui_client_ping() {
-    use ultralog::mcp::client::GuiClient;
+    use snowlv::mcp::client::GuiClient;
 
     let port = find_available_port();
     let server = IpcServer::start_on_port(port).expect("Should start IPC server");
@@ -307,7 +307,7 @@ fn test_gui_client_ping() {
 
 #[test]
 fn test_gui_client_send_command() {
-    use ultralog::mcp::client::GuiClient;
+    use snowlv::mcp::client::GuiClient;
 
     let port = find_available_port();
     let server = IpcServer::start_on_port(port).expect("Should start IPC server");
@@ -353,7 +353,7 @@ fn test_gui_client_send_command() {
 
 #[test]
 fn test_gui_client_fails_when_no_server() {
-    use ultralog::mcp::client::GuiClient;
+    use snowlv::mcp::client::GuiClient;
 
     // Use a port where nothing is listening
     let port = find_available_port();
@@ -371,7 +371,7 @@ fn test_gui_client_fails_when_no_server() {
 
 #[test]
 fn test_mcp_server_handle_url() {
-    use ultralog::mcp::start_mcp_server;
+    use snowlv::mcp::start_mcp_server;
 
     // Start an IPC server first (the MCP server needs it)
     let ipc_port = find_available_port();

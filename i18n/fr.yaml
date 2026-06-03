@@ -1,4 +1,4 @@
-# Traductions francaises pour UltraLog
+# Traductions francaises pour SnowLV
 
 # Menu bar (src/ui/menu.rs)
 menu:
@@ -60,8 +60,6 @@ settings:
   cursor_tracking: "Suivi du curseur"
   cursor_tracking_desc: "Garder le curseur centre pendant le defilement"
   window: "Fenetre :"
-  scroll_to_zoom: "Scroll pour Zoomer"
-  scroll_to_zoom_desc: "La molette de la souris zoome le graphique directement au lieu de faire defiler"
   show_grid: "Afficher la grille"
   show_grid_desc: "Afficher la grille de fond du graphique"
   grid_opacity: "Opacité :"
@@ -142,7 +140,7 @@ update:
   download_complete: "Telechargement termine !"
   install_instructions: "Cliquez sur Installer pour appliquer la mise a jour."
   windows_restart: "L'application va se fermer et redemarrer automatiquement."
-  macos_dmg: "Le DMG va s'ouvrir - glissez UltraLog dans Applications."
+  macos_dmg: "Le DMG va s'ouvrir - glissez SnowLV dans Applications."
   linux_restart: "L'application va se fermer et redemarrer automatiquement."
   install_now: "Installer maintenant"
   install_later: "Installer plus tard"

@@ -14,9 +14,9 @@ mod common;
 use common::assertions::*;
 use common::example_files::*;
 use common::{example_file_exists, read_example_binary};
+use snowlv::parsers::emerald::Emerald;
+use snowlv::parsers::types::Meta;
 use std::path::Path;
-use ultralog::parsers::emerald::Emerald;
-use ultralog::parsers::types::Meta;
 
 // ============================================
 // Format Detection Tests

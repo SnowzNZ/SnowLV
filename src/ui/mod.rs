@@ -1,4 +1,4 @@
-//! UI rendering modules for the UltraLog application.
+//! UI rendering modules for the SnowLV application.
 //!
 //! This module organizes the various UI components into logical submodules:
 //!
@@ -8,7 +8,7 @@
 //! - `files_panel` - File management, loading, and file list
 //! - `channels_panel` - Channel selection (works in all modes)
 //! - `tools_panel` - Analysis tools, computed channels, export
-//! - `settings_panel` - Consolidated settings (display, units, normalization, updates)
+//! - `settings_panel` - Consolidated settings (display, units, normalization)
 //!
 //! ## Core UI Components
 //! - `sidebar` - Legacy files panel (being replaced by files_panel)
@@ -24,7 +24,6 @@
 //! - `scatter_plot` - Scatter plot visualization view
 //! - `histogram` - Histogram visualization view
 //! - `tab_bar` - Chrome-style tabs for managing multiple log files
-//! - `update_dialog` - Auto-update dialog window
 //! - `analysis_panel` - Signal analysis tools window
 //! - `computed_channels_manager` - Computed channels library manager
 //! - `formula_editor` - Formula creation and editing
@@ -104,4 +103,3 @@ pub mod tab_bar;
 pub mod timeline;
 pub mod toast;
 pub mod tool_switcher;
-pub mod update_dialog;

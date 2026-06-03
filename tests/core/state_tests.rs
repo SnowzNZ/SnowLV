@@ -7,16 +7,16 @@
 //! - Constants and palettes
 //! - ActiveTool enum
 
-use std::path::PathBuf;
-use ultralog::parsers::haltech::{ChannelType, HaltechChannel};
-use ultralog::parsers::types::{EcuType, Log, Value};
-use ultralog::parsers::Channel;
-use ultralog::state::{
+use snowlv::parsers::haltech::{ChannelType, HaltechChannel};
+use snowlv::parsers::types::{EcuType, Log, Value};
+use snowlv::parsers::Channel;
+use snowlv::state::{
     ActiveTool, CacheKey, HistogramConfig, HistogramGridSize, HistogramMode, HistogramState,
     LoadResult, LoadedFile, LoadingState, ScatterPlotConfig, ScatterPlotState, SelectedChannel,
     SelectedHeatmapPoint, SelectedHistogramCell, Tab, ToastType, CHART_COLORS, COLORBLIND_COLORS,
     MAX_CHANNELS, MAX_CHART_POINTS, SUPPORTED_EXTENSIONS,
 };
+use std::path::PathBuf;
 
 // ============================================
 // Constant Tests
@@ -440,6 +440,7 @@ fn test_selected_channel_clone() {
         channel_index: 1,
         channel: channel.clone(),
         color_index: 2,
+        hidden: false,
     };
 
     let cloned = selected.clone();
@@ -447,6 +448,7 @@ fn test_selected_channel_clone() {
     assert_eq!(cloned.file_index, 0);
     assert_eq!(cloned.channel_index, 1);
     assert_eq!(cloned.color_index, 2);
+    assert!(!cloned.hidden);
 }
 
 // ============================================
@@ -455,7 +457,7 @@ fn test_selected_channel_clone() {
 
 fn create_test_log() -> Log {
     Log {
-        meta: ultralog::parsers::types::Meta::Empty,
+        meta: snowlv::parsers::types::Meta::Empty,
         channels: vec![
             Channel::Haltech(HaltechChannel {
                 name: "Engine Speed".to_string(),
@@ -534,7 +536,7 @@ fn test_loaded_file_channel_has_data() {
 #[test]
 fn test_loaded_file_all_zero_channel() {
     let log = Log {
-        meta: ultralog::parsers::types::Meta::Empty,
+        meta: snowlv::parsers::types::Meta::Empty,
         channels: vec![Channel::Haltech(HaltechChannel {
             name: "Zero Channel".to_string(),
             id: "0".to_string(),
@@ -565,7 +567,7 @@ fn test_loaded_file_all_zero_channel() {
 fn test_loaded_file_near_zero_channel() {
     // Values very close to zero should be considered as no data
     let log = Log {
-        meta: ultralog::parsers::types::Meta::Empty,
+        meta: snowlv::parsers::types::Meta::Empty,
         channels: vec![Channel::Haltech(HaltechChannel {
             name: "Near Zero".to_string(),
             id: "0".to_string(),
@@ -660,7 +662,7 @@ fn test_loaded_file_get_channel_column_idempotent() {
 #[test]
 fn test_loaded_file_get_channel_column_empty_log() {
     let log = Log {
-        meta: ultralog::parsers::types::Meta::Empty,
+        meta: snowlv::parsers::types::Meta::Empty,
         channels: vec![],
         times: vec![],
         data: vec![],

@@ -2,11 +2,11 @@
 
 use eframe::egui;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::state::{ActiveTool, LoadingState};
 use crate::ui::icons::draw_upload_icon;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the left sidebar with file list and view options
     pub fn render_sidebar(&mut self, ui: &mut egui::Ui) {
         ui.heading("Files");
@@ -240,18 +240,18 @@ impl UltraLogApp {
                     .corner_radius(8)
                     .inner_margin(10.0)
                     .show(ui, |ui| {
-                        // Cursor tracking checkbox
+                        // Playhead tracking checkbox
                         ui.checkbox(
                             &mut self.cursor_tracking,
-                            egui::RichText::new("🎯  Cursor Tracking").size(font_14),
+                            egui::RichText::new("🎯  Playhead Tracking").size(font_14),
                         );
                         ui.label(
-                            egui::RichText::new("Keep cursor centered while scrubbing")
+                            egui::RichText::new("Keep playhead centered while scrubbing")
                                 .color(egui::Color32::GRAY)
                                 .size(font_12),
                         );
 
-                        // Window size slider (only show when cursor tracking is enabled)
+                        // Window size slider (only show when playhead tracking is enabled)
                         if self.cursor_tracking {
                             ui.add_space(8.0);
                             ui.label(egui::RichText::new("View Window:").size(font_14));

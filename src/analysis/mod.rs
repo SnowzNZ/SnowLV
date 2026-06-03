@@ -1,7 +1,7 @@
 //! Analysis module for ECU log analysis algorithms.
 //!
 //! This module provides a unified framework for implementing analysis algorithms
-//! that can process log data and produce results that integrate with UltraLog's
+//! that can process log data and produce results that integrate with SnowLV's
 //! computed channels system.
 //!
 //! The architecture follows a trait-based design where each analyzer implements

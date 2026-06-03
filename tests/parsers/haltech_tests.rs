@@ -15,8 +15,8 @@ use common::assertions::*;
 use common::example_files::*;
 use common::float_cmp::*;
 use common::{example_file_exists, read_example_file};
-use ultralog::parsers::haltech::Haltech;
-use ultralog::parsers::types::Parseable;
+use snowlv::parsers::haltech::Haltech;
+use snowlv::parsers::types::Parseable;
 
 // ============================================
 // Format Detection Tests

@@ -3,16 +3,16 @@
 //! These tests verify the computed channels functionality works correctly
 //! with parsed log files and integrates properly with the existing features.
 
-use std::collections::HashMap;
-use ultralog::computed::{
+use snowlv::computed::{
     ComputedChannel, ComputedChannelLibrary, ComputedChannelTemplate, FormulaEditorState, TimeShift,
 };
-use ultralog::expression::{
+use snowlv::expression::{
     build_channel_bindings, evaluate_all_records, extract_channel_references, generate_preview,
     validate_formula,
 };
-use ultralog::parsers::haltech::Haltech;
-use ultralog::parsers::types::{Parseable, Value};
+use snowlv::parsers::haltech::Haltech;
+use snowlv::parsers::types::{Parseable, Value};
+use std::collections::HashMap;
 
 /// Helper function to read a file, panicking with a clear message if not found.
 fn read_example_file(file_path: &str) -> String {

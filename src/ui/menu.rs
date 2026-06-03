@@ -1,21 +1,57 @@
-//! Menu bar UI components (File, View, Help menus).
+//! Menu bar UI components (File and View menus).
 //!
 //! Simplified menu structure - settings moved to Settings panel.
 
 use eframe::egui;
 use rust_i18n::t;
 
-use crate::app::UltraLogApp;
-use crate::state::{ActivePanel, ActiveTool, LoadingState};
+use crate::app::SnowLVApp;
+use crate::state::{ActiveTool, LoadingState};
 
-impl UltraLogApp {
+impl SnowLVApp {
+    /// Render the compact application header.
+    pub fn render_app_header(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.set_height(30.0);
+
+            ui.allocate_ui_with_layout(
+                egui::vec2(86.0, 30.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    self.render_menu_bar(ui);
+                },
+            );
+
+            ui.separator();
+            ui.allocate_ui_with_layout(
+                egui::vec2(310.0, 30.0),
+                egui::Layout::left_to_right(egui::Align::Center),
+                |ui| {
+                    self.render_tool_switcher(ui);
+                },
+            );
+
+            if !self.tabs.is_empty() {
+                ui.separator();
+                ui.allocate_ui_with_layout(
+                    egui::vec2(ui.available_width(), 30.0),
+                    egui::Layout::left_to_right(egui::Align::Center),
+                    |ui| {
+                        self.render_tab_bar(ui);
+                    },
+                );
+            }
+        });
+    }
+
     /// Render the application menu bar
     pub fn render_menu_bar(&mut self, ui: &mut egui::Ui) {
         // Pre-compute scaled font sizes for use in closures
         let font_14 = self.scaled_font(14.0);
         let font_15 = self.scaled_font(15.0);
 
-        egui::MenuBar::new().ui(ui, |ui| {
+        ui.scope(|ui| {
             // Increase font size for menu items
             ui.style_mut()
                 .text_styles
@@ -106,7 +142,7 @@ impl UltraLogApp {
                 });
             });
 
-            // View menu - tool modes and panels
+            // View menu - display options
             ui.menu_button(t!("menu.view"), |ui| {
                 ui.set_min_width(200.0);
 
@@ -129,158 +165,6 @@ impl UltraLogApp {
                         self.show_toast_error(&t!("toast.failed_to_save", error = e));
                     }
                 }
-
-                ui.separator();
-
-                // Tool modes
-                ui.label(
-                    egui::RichText::new(t!("menu.tool_mode"))
-                        .size(font_14)
-                        .color(egui::Color32::GRAY),
-                );
-
-                if ui
-                    .radio_value(
-                        &mut self.active_tool,
-                        ActiveTool::LogViewer,
-                        t!("menu.log_viewer"),
-                    )
-                    .on_hover_text("\u{2318}1")
-                    .clicked()
-                {
-                    ui.close();
-                }
-                if ui
-                    .radio_value(
-                        &mut self.active_tool,
-                        ActiveTool::ScatterPlot,
-                        t!("menu.scatter_plots"),
-                    )
-                    .on_hover_text("\u{2318}2")
-                    .clicked()
-                {
-                    ui.close();
-                }
-                if ui
-                    .radio_value(
-                        &mut self.active_tool,
-                        ActiveTool::Histogram,
-                        t!("menu.histogram"),
-                    )
-                    .on_hover_text("\u{2318}3")
-                    .clicked()
-                {
-                    ui.close();
-                }
-
-                ui.separator();
-
-                // Panel navigation
-                ui.label(
-                    egui::RichText::new(t!("menu.side_panel"))
-                        .size(font_14)
-                        .color(egui::Color32::GRAY),
-                );
-
-                if ui
-                    .radio_value(&mut self.active_panel, ActivePanel::Files, t!("menu.files"))
-                    .on_hover_text("\u{2318}\u{21E7}F")
-                    .clicked()
-                {
-                    ui.close();
-                }
-                if ui
-                    .radio_value(
-                        &mut self.active_panel,
-                        ActivePanel::ToolProperties,
-                        t!("menu.channels"),
-                    )
-                    .on_hover_text("\u{2318}\u{21E7}C")
-                    .clicked()
-                {
-                    ui.close();
-                }
-                if ui
-                    .radio_value(&mut self.active_panel, ActivePanel::Tools, t!("menu.tools"))
-                    .on_hover_text("\u{2318}\u{21E7}T")
-                    .clicked()
-                {
-                    ui.close();
-                }
-                if ui
-                    .radio_value(
-                        &mut self.active_panel,
-                        ActivePanel::Settings,
-                        t!("menu.settings"),
-                    )
-                    .on_hover_text("\u{2318},")
-                    .clicked()
-                {
-                    ui.close();
-                }
-            });
-
-            // Help menu
-            ui.menu_button(t!("menu.help"), |ui| {
-                ui.set_min_width(200.0);
-
-                ui.style_mut()
-                    .text_styles
-                    .insert(egui::TextStyle::Button, egui::FontId::proportional(font_14));
-                ui.style_mut()
-                    .text_styles
-                    .insert(egui::TextStyle::Body, egui::FontId::proportional(font_14));
-
-                if ui.button(t!("menu.documentation")).clicked() {
-                    let _ = open::that("https://github.com/ClassicMiniDIY/UltraLog/wiki");
-                    ui.close();
-                }
-
-                if ui.button(t!("menu.report_issue")).clicked() {
-                    let _ = open::that("https://github.com/ClassicMiniDIY/UltraLog/issues");
-                    ui.close();
-                }
-
-                ui.separator();
-
-                if ui.button(t!("menu.support_development")).clicked() {
-                    let _ = open::that("https://github.com/sponsors/ClassicMiniDIY");
-                    ui.close();
-                }
-
-                ui.separator();
-
-                // Check for Updates
-                let is_checking = matches!(
-                    self.update_state,
-                    crate::updater::UpdateState::Checking
-                        | crate::updater::UpdateState::Downloading
-                );
-                let button_text = if is_checking {
-                    t!("menu.checking_for_updates")
-                } else {
-                    t!("menu.check_for_updates")
-                };
-
-                if ui
-                    .add_enabled(!is_checking, egui::Button::new(button_text))
-                    .clicked()
-                {
-                    self.start_update_check();
-                    ui.close();
-                }
-
-                ui.separator();
-
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(t!(
-                            "menu.version",
-                            version = env!("CARGO_PKG_VERSION")
-                        ))
-                        .color(egui::Color32::GRAY),
-                    );
-                });
             });
         });
     }

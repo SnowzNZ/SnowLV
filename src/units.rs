@@ -3,8 +3,10 @@
 //! This module provides user-configurable unit preferences for displaying
 //! ECU log data in various measurement systems (metric, imperial, etc.).
 
+use serde::{Deserialize, Serialize};
+
 /// Temperature unit preference
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub enum TemperatureUnit {
     Kelvin,
     #[default]
@@ -32,10 +34,11 @@ impl TemperatureUnit {
 }
 
 /// Pressure unit preference
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub enum PressureUnit {
     #[default]
     KPa,
+    HPa,
     PSI,
     Bar,
 }
@@ -44,6 +47,7 @@ impl PressureUnit {
     pub fn symbol(&self) -> &'static str {
         match self {
             PressureUnit::KPa => "kPa",
+            PressureUnit::HPa => "hPa",
             PressureUnit::PSI => "PSI",
             PressureUnit::Bar => "bar",
         }
@@ -53,6 +57,7 @@ impl PressureUnit {
     pub fn convert_from_kpa(&self, kpa: f64) -> f64 {
         match self {
             PressureUnit::KPa => kpa,
+            PressureUnit::HPa => kpa * 10.0,
             PressureUnit::PSI => kpa * 0.145038,
             PressureUnit::Bar => kpa * 0.01,
         }
@@ -60,7 +65,7 @@ impl PressureUnit {
 }
 
 /// Speed unit preference
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub enum SpeedUnit {
     #[default]
     KmH,
@@ -85,7 +90,7 @@ impl SpeedUnit {
 }
 
 /// Distance unit preference
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub enum DistanceUnit {
     #[default]
     Kilometers,
@@ -110,11 +115,13 @@ impl DistanceUnit {
 }
 
 /// Fuel economy unit preference
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub enum FuelEconomyUnit {
     #[default]
     LPer100Km,
-    Mpg,
+    #[serde(alias = "Mpg")]
+    MpgUs,
+    MpgUk,
     KmPerL,
 }
 
@@ -122,7 +129,8 @@ impl FuelEconomyUnit {
     pub fn symbol(&self) -> &'static str {
         match self {
             FuelEconomyUnit::LPer100Km => "L/100km",
-            FuelEconomyUnit::Mpg => "mpg",
+            FuelEconomyUnit::MpgUs => "mpg US",
+            FuelEconomyUnit::MpgUk => "mpg UK",
             FuelEconomyUnit::KmPerL => "km/L",
         }
     }
@@ -131,9 +139,16 @@ impl FuelEconomyUnit {
     pub fn convert_from_l_per_100km(&self, l_per_100km: f64) -> f64 {
         match self {
             FuelEconomyUnit::LPer100Km => l_per_100km,
-            FuelEconomyUnit::Mpg => {
+            FuelEconomyUnit::MpgUs => {
                 if l_per_100km > 0.0 {
                     235.215 / l_per_100km
+                } else {
+                    0.0
+                }
+            }
+            FuelEconomyUnit::MpgUk => {
+                if l_per_100km > 0.0 {
+                    282.481 / l_per_100km
                 } else {
                     0.0
                 }
@@ -150,7 +165,7 @@ impl FuelEconomyUnit {
 }
 
 /// Volume unit preference
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub enum VolumeUnit {
     #[default]
     Liters,
@@ -175,7 +190,7 @@ impl VolumeUnit {
 }
 
 /// Flow rate unit preference
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub enum FlowUnit {
     #[default]
     CcPerMin,
@@ -201,7 +216,7 @@ impl FlowUnit {
 }
 
 /// Acceleration unit preference
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub enum AccelerationUnit {
     #[default]
     MPerS2,
@@ -230,10 +245,10 @@ impl AccelerationUnit {
 /// ECU logs may output mixture data as either AFR (Air Fuel Ratio, e.g. 14.7 for stoich gasoline)
 /// or Lambda (normalized ratio, e.g. 1.0 for stoich). This preference controls which format
 /// is displayed regardless of what the source ECU outputs.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub enum AfrLambdaUnit {
-    #[default]
     AFR,
+    #[default]
     Lambda,
 }
 
@@ -266,7 +281,7 @@ impl AfrLambdaUnit {
 }
 
 /// User preferences for display units
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq, Serialize)]
 pub struct UnitPreferences {
     pub temperature: TemperatureUnit,
     pub pressure: PressureUnit,
@@ -279,7 +294,53 @@ pub struct UnitPreferences {
     pub afr_lambda: AfrLambdaUnit,
 }
 
+/// High-level unit preset shown in Settings.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum UnitPreset {
+    Metric,
+    Imperial,
+    Custom,
+}
+
+impl UnitPreset {
+    pub fn label(&self) -> &'static str {
+        match self {
+            UnitPreset::Metric => "Metric",
+            UnitPreset::Imperial => "Imperial",
+            UnitPreset::Custom => "Custom",
+        }
+    }
+}
+
 impl UnitPreferences {
+    pub fn metric() -> Self {
+        Self::default()
+    }
+
+    pub fn imperial() -> Self {
+        Self {
+            temperature: TemperatureUnit::Fahrenheit,
+            pressure: PressureUnit::PSI,
+            speed: SpeedUnit::Mph,
+            distance: DistanceUnit::Miles,
+            fuel_economy: FuelEconomyUnit::MpgUs,
+            volume: VolumeUnit::Gallons,
+            flow: FlowUnit::LbPerHr,
+            acceleration: AccelerationUnit::G,
+            afr_lambda: AfrLambdaUnit::AFR,
+        }
+    }
+
+    pub fn preset(&self) -> UnitPreset {
+        if *self == Self::metric() {
+            UnitPreset::Metric
+        } else if *self == Self::imperial() {
+            UnitPreset::Imperial
+        } else {
+            UnitPreset::Custom
+        }
+    }
+
     /// Convert a value and get the display unit based on the source unit string
     /// Returns (converted_value, display_unit)
     pub fn convert_value<'a>(&self, value: f64, source_unit: &'a str) -> (f64, &'a str) {
@@ -410,8 +471,15 @@ mod tests {
     }
 
     #[test]
+    fn test_pressure_kpa_to_hpa() {
+        let unit = PressureUnit::HPa;
+        assert!((unit.convert_from_kpa(101.325) - 1013.25).abs() < 0.001);
+    }
+
+    #[test]
     fn test_pressure_symbols() {
         assert_eq!(PressureUnit::KPa.symbol(), "kPa");
+        assert_eq!(PressureUnit::HPa.symbol(), "hPa");
         assert_eq!(PressureUnit::PSI.symbol(), "PSI");
         assert_eq!(PressureUnit::Bar.symbol(), "bar");
     }
@@ -480,13 +548,21 @@ mod tests {
     }
 
     #[test]
-    fn test_fuel_economy_l_per_100km_to_mpg() {
-        let unit = FuelEconomyUnit::Mpg;
+    fn test_fuel_economy_l_per_100km_to_mpg_us() {
+        let unit = FuelEconomyUnit::MpgUs;
         // 10 L/100km ≈ 23.52 mpg
         assert!((unit.convert_from_l_per_100km(10.0) - 23.5215).abs() < 0.01);
         // 5 L/100km ≈ 47.04 mpg
         assert!((unit.convert_from_l_per_100km(5.0) - 47.043).abs() < 0.01);
         // Edge case: 0 L/100km should return 0 (not divide by zero)
+        assert_eq!(unit.convert_from_l_per_100km(0.0), 0.0);
+    }
+
+    #[test]
+    fn test_fuel_economy_l_per_100km_to_mpg_uk() {
+        let unit = FuelEconomyUnit::MpgUk;
+        assert!((unit.convert_from_l_per_100km(10.0) - 28.2481).abs() < 0.01);
+        assert!((unit.convert_from_l_per_100km(5.0) - 56.4962).abs() < 0.01);
         assert_eq!(unit.convert_from_l_per_100km(0.0), 0.0);
     }
 
@@ -504,7 +580,8 @@ mod tests {
     #[test]
     fn test_fuel_economy_symbols() {
         assert_eq!(FuelEconomyUnit::LPer100Km.symbol(), "L/100km");
-        assert_eq!(FuelEconomyUnit::Mpg.symbol(), "mpg");
+        assert_eq!(FuelEconomyUnit::MpgUs.symbol(), "mpg US");
+        assert_eq!(FuelEconomyUnit::MpgUk.symbol(), "mpg UK");
         assert_eq!(FuelEconomyUnit::KmPerL.symbol(), "km/L");
     }
 
@@ -602,7 +679,21 @@ mod tests {
         assert_eq!(prefs.volume, VolumeUnit::Liters);
         assert_eq!(prefs.flow, FlowUnit::CcPerMin);
         assert_eq!(prefs.acceleration, AccelerationUnit::MPerS2);
-        assert_eq!(prefs.afr_lambda, AfrLambdaUnit::AFR);
+        assert_eq!(prefs.afr_lambda, AfrLambdaUnit::Lambda);
+    }
+
+    #[test]
+    fn test_unit_preferences_presets() {
+        assert_eq!(UnitPreferences::metric().preset(), UnitPreset::Metric);
+
+        let imperial = UnitPreferences::imperial();
+        assert_eq!(imperial.preset(), UnitPreset::Imperial);
+        assert_eq!(imperial.fuel_economy, FuelEconomyUnit::MpgUs);
+        assert_eq!(imperial.afr_lambda, AfrLambdaUnit::AFR);
+
+        let mut custom = UnitPreferences::metric();
+        custom.pressure = PressureUnit::Bar;
+        assert_eq!(custom.preset(), UnitPreset::Custom);
     }
 
     #[test]
@@ -657,7 +748,7 @@ mod tests {
             pressure: PressureUnit::PSI,
             speed: SpeedUnit::Mph,
             distance: DistanceUnit::Miles,
-            fuel_economy: FuelEconomyUnit::Mpg,
+            fuel_economy: FuelEconomyUnit::MpgUs,
             volume: VolumeUnit::Gallons,
             flow: FlowUnit::LbPerHr,
             acceleration: AccelerationUnit::G,
@@ -678,7 +769,7 @@ mod tests {
         assert_eq!(unit, "mi");
 
         let (_, unit) = prefs.convert_value(10.0, "L/100km");
-        assert_eq!(unit, "mpg");
+        assert_eq!(unit, "mpg US");
 
         let (_, unit) = prefs.convert_value(50.0, "L");
         assert_eq!(unit, "gal");
@@ -701,9 +792,9 @@ mod tests {
     // ============================================
 
     #[test]
-    fn test_afr_lambda_default_is_afr() {
+    fn test_afr_lambda_default_is_lambda() {
         let unit = AfrLambdaUnit::default();
-        assert_eq!(unit, AfrLambdaUnit::AFR);
+        assert_eq!(unit, AfrLambdaUnit::Lambda);
     }
 
     #[test]

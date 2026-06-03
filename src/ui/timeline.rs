@@ -4,9 +4,9 @@ use eframe::egui;
 use rust_i18n::t;
 
 use crate::analytics;
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the timeline scrubber bar
     pub fn render_timeline_scrubber(&mut self, ui: &mut egui::Ui) {
         // Pre-compute scaled font size
@@ -59,6 +59,7 @@ impl UltraLogApp {
             // Stop playback when user manually scrubs
             self.is_playing = false;
             self.last_frame_time = None;
+            self.playback_record_position = None;
 
             self.set_cursor_time(Some(slider_value));
             let record = self.find_record_at_time(slider_value);
@@ -72,6 +73,7 @@ impl UltraLogApp {
     pub fn render_record_indicator(&mut self, ui: &mut egui::Ui) {
         // Pre-compute scaled font size
         let font_14 = self.scaled_font(14.0);
+        let theme = self.theme();
 
         ui.horizontal(|ui| {
             // Playback controls
@@ -87,9 +89,9 @@ impl UltraLogApp {
                 egui::RichText::new(play_text)
                     .size(self.scaled_font(16.0))
                     .color(if self.is_playing {
-                        egui::Color32::from_rgb(253, 193, 73) // Amber when playing
+                        theme.color(theme.warning)
                     } else {
-                        egui::Color32::from_rgb(144, 238, 144) // Light green when paused
+                        theme.color(theme.success)
                     }),
             )
             .min_size(button_size);
@@ -101,12 +103,14 @@ impl UltraLogApp {
                     analytics::track_playback_started(self.playback_speed);
                     // Reset frame time when starting playback
                     self.last_frame_time = Some(std::time::Instant::now());
+                    self.playback_record_position = self.get_cursor_record().map(|r| r as f64);
                     // Initialize cursor if not set
                     if self.get_cursor_time().is_none() {
                         if let Some((min, _)) = self.get_time_range() {
                             self.set_cursor_time(Some(min));
                             let record = self.find_record_at_time(min);
                             self.set_cursor_record(record);
+                            self.playback_record_position = record.map(|r| r as f64);
                         }
                     }
                 }
@@ -116,13 +120,14 @@ impl UltraLogApp {
             let stop_button = egui::Button::new(
                 egui::RichText::new("\u{23F9}")
                     .size(self.scaled_font(16.0))
-                    .color(egui::Color32::from_rgb(191, 78, 48)), // Rust orange
+                    .color(theme.color(theme.error)),
             )
             .min_size(button_size);
 
             if ui.add(stop_button).clicked() {
                 self.is_playing = false;
                 self.last_frame_time = None;
+                self.playback_record_position = None;
                 // Reset cursor to beginning
                 if let Some((min, _)) = self.get_time_range() {
                     self.set_cursor_time(Some(min));
@@ -136,7 +141,7 @@ impl UltraLogApp {
             // Playback speed selector
             ui.label(
                 egui::RichText::new(t!("timeline.speed"))
-                    .color(egui::Color32::GRAY)
+                    .color(theme.color(theme.muted_text))
                     .size(font_14),
             );
 
@@ -152,12 +157,16 @@ impl UltraLogApp {
 
             ui.separator();
 
+            self.render_playback_rate_controls(ui);
+
+            ui.separator();
+
             // Current time display
             if let Some(time) = self.get_cursor_time() {
                 ui.label(
                     egui::RichText::new(t!("timeline.time", time = Self::format_time(time)))
                         .strong()
-                        .color(egui::Color32::from_rgb(0, 255, 255)) // Cyan to match cursor
+                        .color(theme.color(theme.playhead))
                         .size(font_14),
                 );
             }
@@ -185,6 +194,36 @@ impl UltraLogApp {
         });
     }
 
+    /// Render optional record-rate playback controls for logs with bad/missing timing.
+    fn render_playback_rate_controls(&mut self, ui: &mut egui::Ui) {
+        let font_14 = self.scaled_font(14.0);
+        let Some(tab_idx) = self.active_tab else {
+            return;
+        };
+
+        let old_override = self.tabs[tab_idx].playback_rate_override;
+        ui.checkbox(
+            &mut self.tabs[tab_idx].playback_rate_override,
+            egui::RichText::new(t!("timeline.logger_rate")).size(font_14),
+        );
+
+        if self.tabs[tab_idx].playback_rate_override != old_override {
+            self.playback_record_position = self.get_cursor_record().map(|r| r as f64);
+        }
+
+        if self.tabs[tab_idx].playback_rate_override {
+            let rate = &mut self.tabs[tab_idx].playback_rate_hz;
+            ui.add(
+                egui::DragValue::new(rate)
+                    .range(0.1..=1000.0)
+                    .speed(1.0)
+                    .fixed_decimals(1)
+                    .suffix(" Hz"),
+            );
+            *rate = rate.clamp(0.1, 1000.0);
+        }
+    }
+
     /// Update playback state - advances cursor based on elapsed time
     pub fn update_playback(&mut self, ctx: &egui::Context) {
         if !self.is_playing {
@@ -204,6 +243,12 @@ impl UltraLogApp {
         };
         self.last_frame_time = Some(now);
 
+        if self.playback_rate_override_enabled() {
+            self.update_record_rate_playback(delta, max_time);
+            ctx.request_repaint();
+            return;
+        }
+
         // Advance cursor by delta * playback_speed
         if let Some(current_time) = self.get_cursor_time() {
             let new_time = current_time + (delta * self.playback_speed);
@@ -215,6 +260,7 @@ impl UltraLogApp {
                 self.set_cursor_record(record);
                 self.is_playing = false;
                 self.last_frame_time = None;
+                self.playback_record_position = None;
             } else {
                 self.set_cursor_time(Some(new_time));
                 let record = self.find_record_at_time(new_time);
@@ -229,5 +275,57 @@ impl UltraLogApp {
 
         // Request continuous repaint during playback
         ctx.request_repaint();
+    }
+
+    fn playback_rate_override_enabled(&self) -> bool {
+        self.active_tab
+            .map(|idx| self.tabs[idx].playback_rate_override)
+            .unwrap_or(false)
+    }
+
+    fn update_record_rate_playback(&mut self, delta: f64, max_time: f64) {
+        let Some(tab_idx) = self.active_tab else {
+            self.is_playing = false;
+            return;
+        };
+
+        let file_index = self.tabs[tab_idx].file_index;
+        if file_index >= self.files.len() {
+            self.is_playing = false;
+            return;
+        }
+
+        let times = self.files[file_index].log.get_times_as_f64();
+        if times.is_empty() {
+            self.is_playing = false;
+            return;
+        }
+        let time_count = times.len();
+        let last_time = *times.last().unwrap_or(&max_time);
+
+        let rate_hz = self.tabs[tab_idx].playback_rate_hz.clamp(0.1, 1000.0);
+        self.tabs[tab_idx].playback_rate_hz = rate_hz;
+
+        let current_record = self.get_cursor_record().unwrap_or(0).min(time_count - 1);
+        let current_position = self
+            .playback_record_position
+            .unwrap_or(current_record as f64)
+            .max(0.0);
+        let new_position = current_position + (delta * rate_hz * self.playback_speed);
+        let new_record = new_position.floor() as usize;
+
+        if new_record >= time_count - 1 {
+            self.set_cursor_record(Some(time_count - 1));
+            self.set_cursor_time(Some(last_time));
+            self.is_playing = false;
+            self.last_frame_time = None;
+            self.playback_record_position = None;
+            return;
+        }
+
+        let new_time = times[new_record];
+        self.playback_record_position = Some(new_position);
+        self.set_cursor_record(Some(new_record));
+        self.set_cursor_time(Some(new_time));
     }
 }

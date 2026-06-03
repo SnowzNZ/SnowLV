@@ -1,5 +1,5 @@
 name: Bug Report
-description: Report a bug or unexpected behavior in UltraLog
+description: Report a bug or unexpected behavior in SnowLV
 title: "[Bug]: "
 labels: ["bug"]
 body:
@@ -11,8 +11,8 @@ body:
   - type: input
     id: version
     attributes:
-      label: UltraLog Version
-      description: What version of UltraLog are you using?
+      label: SnowLV Version
+      description: What version of SnowLV are you using?
       placeholder: "e.g., 1.2.0"
     validations:
       required: true
@@ -21,7 +21,7 @@ body:
     id: os
     attributes:
       label: Operating System
-      description: What OS are you running UltraLog on?
+      description: What OS are you running SnowLV on?
       options:
         - macOS (Apple Silicon)
         - macOS (Intel)
@@ -63,7 +63,7 @@ body:
       label: Steps to Reproduce
       description: How can we reproduce this behavior?
       placeholder: |
-        1. Open UltraLog
+        1. Open SnowLV
         2. Load a log file
         3. Click on '...'
         4. See error

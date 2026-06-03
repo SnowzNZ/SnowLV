@@ -1,18 +1,18 @@
 [package]
-name = "ultralog"
+name = "snowlv"
 version = "2.9.0"
 edition = "2021"
 description = "A high-performance ECU log viewer written in Rust"
 authors = ["Cole Gentry"]
 license = "AGPL-3.0"
-repository = "https://github.com/ClassicMiniDIY/UltraLog"
+repository = "https://github.com/ClassicMiniDIY/SnowLV"
 readme = "README.md"
 keywords = ["ecu", "datalog", "haltech", "automotive", "tuning"]
 categories = ["visualization", "gui"]
-default-run = "ultralog"
+default-run = "snowlv"
 
 [[bin]]
-name = "ultralog"
+name = "snowlv"
 path = "src/main.rs"
 
 [[bin]]
@@ -53,12 +53,7 @@ open = "5"    # Open URLs in default browser
 memmap2 = "0.9"  # Memory-mapped file loading for large files
 encoding_rs = "0.8"  # Character encoding detection and conversion (UTF-16, etc.)
 
-# Auto-update
 ureq = { version = "3.3", features = ["json"] }  # Minimal HTTP client
-semver = "1.0"  # Version comparison
-zip = "8.5"     # ZIP extraction for Windows updates
-flate2 = "1.1"  # Gzip decompression for Linux updates
-tar = "0.4"     # Tar archive extraction for Linux updates
 
 # Image loading (for app icon and PNG export)
 image = { version = "0.25", default-features = false, features = ["png"] }
@@ -83,6 +78,9 @@ chrono = { version = "0.4.44", features = ["serde"] }
 
 # Clipboard support for histogram copy/paste
 arboard = "3.6"
+
+# Discord Rich Presence
+discord-rich-presence = "1.1"
 
 # MCP (Model Context Protocol) server for Claude Desktop integration
 rmcp = { version = "0.12", features = ["server", "transport-streamable-http-server", "macros"] }

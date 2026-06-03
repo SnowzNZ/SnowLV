@@ -1,6 +1,6 @@
-//! Inter-process communication module for UltraLog MCP integration
+//! Inter-process communication module for SnowLV MCP integration
 //!
-//! This module defines the protocol for communication between the UltraLog GUI
+//! This module defines the protocol for communication between the SnowLV GUI
 //! and the MCP server, allowing Claude to control the running application.
 
 pub mod commands;

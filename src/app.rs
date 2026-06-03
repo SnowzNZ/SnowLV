@@ -1,4 +1,4 @@
-//! Main application module for UltraLog.
+//! Main application module for SnowLV.
 //!
 //! This module contains the core application state and the main eframe::App
 //! implementation. UI rendering is delegated to the `ui` submodules.
@@ -17,6 +17,7 @@ use crate::adapters;
 use crate::analysis::{AnalysisResult, AnalyzerRegistry};
 use crate::analytics;
 use crate::computed::{ComputedChannel, ComputedChannelLibrary, FormulaEditorState};
+use crate::discord_presence::{ActivitySignature, DiscordPresence};
 use crate::i18n::Language;
 use crate::ipc::IpcServer;
 use crate::mcp::{start_mcp_server, McpServerHandle, DEFAULT_MCP_PORT};
@@ -27,18 +28,18 @@ use crate::parsers::{
 use crate::settings::UserSettings;
 use crate::state::{
     ActivePanel, ActiveTool, CacheKey, FontScale, LoadResult, LoadedFile, LoadingState, PlotArea,
-    ScatterPlotConfig, ScatterPlotState, SelectedChannel, Tab, ToastType, CHART_COLORS,
-    COLORBLIND_COLORS, MAX_CHANNELS, MAX_CHANNELS_PER_PLOT, MAX_TOTAL_CHANNELS, MIN_PLOT_HEIGHT,
+    ScatterPlotConfig, ScatterPlotState, SelectedChannel, Tab, ToastType, COLORBLIND_COLORS,
+    MAX_CHANNELS, MAX_CHANNELS_PER_PLOT, MAX_TOTAL_CHANNELS, MIN_PLOT_HEIGHT,
 };
+use crate::theme::{AppTheme, ThemeId, ThemeRegistry};
 use crate::units::UnitPreferences;
-use crate::updater::{DownloadResult, UpdateCheckResult, UpdateState};
 
 // ============================================================================
 // Main Application State
 // ============================================================================
 
-/// Main application state for UltraLog
-pub struct UltraLogApp {
+/// Main application state for SnowLV
+pub struct SnowLVApp {
     /// List of loaded log files
     pub(crate) files: Vec<LoadedFile>,
     /// Currently selected file index (matches active tab's file)
@@ -83,6 +84,8 @@ pub struct UltraLogApp {
     pub(crate) last_frame_time: Option<std::time::Instant>,
     /// Playback speed multiplier (1.0 = real-time)
     pub(crate) playback_speed: f64,
+    /// Fractional record cursor used while playback rate override is enabled
+    pub(crate) playback_record_position: Option<f64>,
     // === Accessibility ===
     /// When true, use colorblind-friendly color palette
     pub(crate) color_blind_mode: bool,
@@ -91,10 +94,8 @@ pub struct UltraLogApp {
     // === Chart View State ===
     /// Initial view window in seconds (shown before user interacts with chart)
     pub(crate) initial_view_seconds: f64,
-    /// When true, scroll wheel zooms chart directly instead of panning
-    pub(crate) scroll_to_zoom: bool,
-    /// When true, drag on the chart pans the visible time window
-    pub(crate) drag_to_pan: bool,
+    /// When true, current channel values are drawn beside the cursor line
+    pub(crate) values_follow_cursor: bool,
     /// When true, draw the chart background grid
     pub(crate) show_grid: bool,
     /// Grid line opacity (0..=255) used as the alpha of the base grid color
@@ -128,21 +129,6 @@ pub struct UltraLogApp {
     pub(crate) tabs: Vec<Tab>,
     /// Index of the currently active tab
     pub(crate) active_tab: Option<usize>,
-    // === Auto-Update ===
-    /// Current state of the update checker
-    pub(crate) update_state: UpdateState,
-    /// Receiver for update check results from background thread
-    update_check_receiver: Option<Receiver<UpdateCheckResult>>,
-    /// Receiver for download results from background thread
-    update_download_receiver: Option<Receiver<DownloadResult>>,
-    /// Whether to show the update available dialog
-    pub(crate) show_update_dialog: bool,
-    /// User preference: check for updates on startup
-    pub(crate) auto_check_updates: bool,
-    /// Whether the startup check has been performed
-    startup_check_done: bool,
-    /// Set to true when the app should exit for an update to be applied
-    pub(crate) should_exit_for_update: bool,
     // === Computed Channels ===
     /// Global library of computed channel templates
     pub(crate) computed_library: ComputedChannelLibrary,
@@ -170,6 +156,12 @@ pub struct UltraLogApp {
     pub(crate) user_settings: UserSettings,
     /// Current language selection
     pub(crate) language: Language,
+    /// When true, Discord Rich Presence includes the active log file name.
+    pub(crate) discord_rpc_show_log_filename: bool,
+    /// Current application theme
+    pub(crate) theme_id: String,
+    /// Built-in and user-defined theme registry
+    pub(crate) theme_registry: ThemeRegistry,
     // === Spec Refresh ===
     /// Whether spec refresh from API has been started
     spec_refresh_started: bool,
@@ -178,9 +170,11 @@ pub struct UltraLogApp {
     ipc_server: Option<IpcServer>,
     /// MCP HTTP server handle (embedded server for Claude Desktop connection)
     mcp_server: Option<McpServerHandle>,
+    /// Discord Rich Presence client.
+    discord_presence: DiscordPresence,
 }
 
-impl Default for UltraLogApp {
+impl Default for SnowLVApp {
     fn default() -> Self {
         Self {
             files: Vec::new(),
@@ -200,11 +194,11 @@ impl Default for UltraLogApp {
             is_playing: false,
             last_frame_time: None,
             playback_speed: 1.0,
+            playback_record_position: None,
             color_blind_mode: false,
             field_normalization: true, // Enabled by default for better readability
             initial_view_seconds: 60.0, // Start with 60 second view
-            scroll_to_zoom: false,
-            drag_to_pan: true,
+            values_follow_cursor: false,
             show_grid: true,
             grid_opacity: 255,
             unit_preferences: UnitPreferences::default(),
@@ -219,13 +213,6 @@ impl Default for UltraLogApp {
             active_panel: ActivePanel::default(),
             tabs: Vec::new(),
             active_tab: None,
-            update_state: UpdateState::default(),
-            update_check_receiver: None,
-            update_download_receiver: None,
-            show_update_dialog: false,
-            auto_check_updates: true, // Enabled by default
-            startup_check_done: false,
-            should_exit_for_update: false,
             computed_library: ComputedChannelLibrary::load(),
             file_computed_channels: HashMap::new(),
             show_computed_channels_manager: false,
@@ -238,15 +225,19 @@ impl Default for UltraLogApp {
             analysis_selected_category: None,
             user_settings: UserSettings::default(),
             language: Language::default(),
+            discord_rpc_show_log_filename: true,
+            theme_id: ThemeId::default().id().to_string(),
+            theme_registry: ThemeRegistry::default(),
             spec_refresh_started: false,
             ipc_server: None,
             mcp_server: None,
+            discord_presence: DiscordPresence::new(),
         }
     }
 }
 
-impl UltraLogApp {
-    /// Create a new UltraLogApp instance with custom fonts
+impl SnowLVApp {
+    /// Create a new SnowLVApp instance with custom fonts
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Load custom Outfit font
         let mut fonts = egui::FontDefinitions::default();
@@ -281,16 +272,23 @@ impl UltraLogApp {
         cc.egui_ctx.set_fonts(fonts);
 
         // Load user settings and set locale
-        let user_settings = UserSettings::load();
+        let mut user_settings = UserSettings::load();
         rust_i18n::set_locale(user_settings.language.locale_code());
+        let themes_dir = UserSettings::get_themes_dir();
+        let theme_registry = ThemeRegistry::load(themes_dir.as_deref());
+        let theme_id = theme_registry.resolve_id(&user_settings.theme);
+        user_settings.theme = theme_id.clone();
 
         let mut app = Self {
             user_settings: user_settings.clone(),
             language: user_settings.language,
-            scroll_to_zoom: user_settings.scroll_to_zoom,
-            drag_to_pan: user_settings.drag_to_pan,
+            theme_id,
+            theme_registry,
+            values_follow_cursor: user_settings.values_follow_cursor,
             show_grid: user_settings.show_grid,
             grid_opacity: user_settings.grid_opacity,
+            unit_preferences: user_settings.unit_preferences.clone(),
+            discord_rpc_show_log_filename: user_settings.discord_rpc_show_log_filename,
             ..Self::default()
         };
 
@@ -327,18 +325,84 @@ impl UltraLogApp {
         app
     }
 
+    fn update_discord_presence(&mut self) {
+        let signature = match &self.loading_state {
+            LoadingState::Loading(_) => ActivitySignature::new("Loading ECU log", "Preparing data"),
+            LoadingState::Idle => {
+                let details = if let Some(tab_idx) = self.active_tab {
+                    let file_idx = self.tabs[tab_idx].file_index;
+                    if let Some(file) = self.files.get(file_idx) {
+                        if self.discord_rpc_show_log_filename {
+                            truncate_discord_activity_field(format!("Viewing {}", file.name))
+                        } else {
+                            format!("Viewing {:?} log", file.ecu_type)
+                        }
+                    } else {
+                        "Viewing ECU logs".to_string()
+                    }
+                } else {
+                    "Ready to view ECU logs".to_string()
+                };
+
+                let state = if self.files.is_empty() {
+                    "No logs open".to_string()
+                } else {
+                    format!(
+                        "{} - {} log{} open",
+                        self.active_tool.name(),
+                        self.files.len(),
+                        if self.files.len() == 1 { "" } else { "s" }
+                    )
+                };
+
+                ActivitySignature::new(details, state)
+            }
+        };
+
+        self.discord_presence.update(signature);
+    }
+
     // ========================================================================
     // Color and Unit Helpers
     // ========================================================================
 
     /// Get color for a channel based on color blind mode setting
     pub fn get_channel_color(&self, color_index: usize) -> [u8; 3] {
-        let palette = if self.color_blind_mode {
-            COLORBLIND_COLORS
+        if self.color_blind_mode {
+            COLORBLIND_COLORS[color_index % COLORBLIND_COLORS.len()]
         } else {
-            CHART_COLORS
-        };
-        palette[color_index % palette.len()]
+            let theme = self.theme_registry.theme(&self.theme_id);
+            theme.chart[color_index % theme.chart.len()]
+        }
+    }
+
+    /// Number of colors available for automatic channel assignment.
+    pub fn chart_palette_len(&self) -> usize {
+        if self.color_blind_mode {
+            COLORBLIND_COLORS.len()
+        } else {
+            self.theme_registry.theme(&self.theme_id).chart.len()
+        }
+    }
+
+    /// Current resolved theme, falling back to SnowLV if the selected id is missing.
+    pub fn theme(&self) -> AppTheme {
+        self.theme_registry.theme(&self.theme_id).clone()
+    }
+
+    /// Display name for the current resolved theme.
+    pub fn theme_display_name(&self) -> &str {
+        self.theme_registry.display_name(&self.theme_id)
+    }
+
+    /// Reload file-backed themes and keep the current selection when possible.
+    pub fn reload_theme_registry(&mut self) {
+        let themes_dir = UserSettings::get_themes_dir();
+        let theme_registry = ThemeRegistry::load(themes_dir.as_deref());
+        let theme_id = theme_registry.resolve_id(&self.theme_id);
+        self.theme_registry = theme_registry;
+        self.theme_id = theme_id.clone();
+        self.user_settings.theme = theme_id;
     }
 
     /// Get a scaled font size based on user's font scale preference
@@ -455,10 +519,10 @@ impl UltraLogApp {
         if binary_data.len() >= 4 && &binary_data[0..4] == b"HEPS" {
             return Err(LoadResult::Error(
                 "This is a Haltech .hlgzip file which uses proprietary compression.\n\n\
-                To use this log in UltraLog, please export it as CSV from Haltech's ESP or NSP software:\n\
+                To use this log in SnowLV, please export it as CSV from Haltech's ESP or NSP software:\n\
                 1. Open the .hlgzip file in Haltech ESP/NSP\n\
                 2. Go to File → Export → CSV\n\
-                3. Load the exported .csv file in UltraLog"
+                3. Load the exported .csv file in SnowLV"
                     .to_string(),
             ));
         }
@@ -467,10 +531,10 @@ impl UltraLogApp {
         if binary_data.len() >= 7 && &binary_data[0..7] == b"EMERALD" {
             return Err(LoadResult::Error(
                 "This is an AEM .daq file which uses a proprietary format.\n\n\
-                To use this log in UltraLog, please export it as CSV from AEM's software:\n\
+                To use this log in SnowLV, please export it as CSV from AEM's software:\n\
                 1. Open the .daq file in AEMdata or AEM Pro\n\
                 2. Go to File → Export → CSV\n\
-                3. Load the exported .csv file in UltraLog"
+                3. Load the exported .csv file in SnowLV"
                     .to_string(),
             ));
         }
@@ -1037,7 +1101,7 @@ impl UltraLogApp {
             .map(|c| c.color_index)
             .collect();
 
-        let color_index = (0..CHART_COLORS.len())
+        let color_index = (0..self.chart_palette_len())
             .find(|i| !used_colors.contains(i))
             .unwrap_or(0);
 
@@ -1046,6 +1110,7 @@ impl UltraLogApp {
             channel_index,
             channel,
             color_index,
+            hidden: false,
         });
 
         // In single-plot mode, also add to the default plot area
@@ -1064,6 +1129,17 @@ impl UltraLogApp {
     pub fn remove_channel(&mut self, index: usize) {
         // remove_channel_from_plot handles both stacked and single-plot modes
         self.remove_channel_from_plot(index);
+    }
+
+    /// Toggle whether a selected channel is visible in charts and exports
+    pub fn toggle_channel_hidden(&mut self, index: usize) {
+        let Some(tab_idx) = self.active_tab else {
+            return;
+        };
+
+        if let Some(channel) = self.tabs[tab_idx].selected_channels.get_mut(index) {
+            channel.hidden = !channel.hidden;
+        }
     }
 
     /// Get the selected channels for the active tab
@@ -1284,7 +1360,7 @@ impl UltraLogApp {
             .map(|c| c.color_index)
             .collect();
 
-        let color_index = (0..CHART_COLORS.len())
+        let color_index = (0..self.chart_palette_len())
             .find(|i| !used_colors.contains(i))
             .unwrap_or(0);
 
@@ -1293,6 +1369,7 @@ impl UltraLogApp {
             channel_index,
             channel,
             color_index,
+            hidden: false,
         };
 
         // Add to selected_channels and track its index
@@ -1653,101 +1730,6 @@ impl UltraLogApp {
     }
 
     // ========================================================================
-    // Auto-Update System
-    // ========================================================================
-
-    /// Start checking for updates in background
-    pub fn start_update_check(&mut self) {
-        // Don't start if already checking or downloading
-        if matches!(
-            self.update_state,
-            UpdateState::Checking | UpdateState::Downloading
-        ) {
-            return;
-        }
-
-        self.update_state = UpdateState::Checking;
-
-        let (sender, receiver) = channel();
-        self.update_check_receiver = Some(receiver);
-
-        thread::spawn(move || {
-            let result = crate::updater::check_for_updates();
-            let _ = sender.send(result);
-        });
-    }
-
-    /// Start downloading update in background
-    pub fn start_update_download(&mut self, url: String) {
-        self.update_state = UpdateState::Downloading;
-
-        let (sender, receiver) = channel();
-        self.update_download_receiver = Some(receiver);
-
-        thread::spawn(move || {
-            let result = crate::updater::download_update(&url);
-            let _ = sender.send(result);
-        });
-    }
-
-    /// Check for completed update operations
-    fn check_update_complete(&mut self) {
-        // Check for update check completion
-        if let Some(receiver) = &self.update_check_receiver {
-            if let Ok(result) = receiver.try_recv() {
-                match result {
-                    UpdateCheckResult::UpdateAvailable(info) => {
-                        self.update_state = UpdateState::UpdateAvailable(info);
-                        self.show_update_dialog = true;
-                        analytics::track_update_checked(true);
-                    }
-                    UpdateCheckResult::UpToDate => {
-                        self.update_state = UpdateState::Idle;
-                        analytics::track_update_checked(false);
-                        // Only show toast for manual checks (not startup)
-                        if self.startup_check_done {
-                            self.show_toast_success(&t!("toast.up_to_date"));
-                        }
-                    }
-                    UpdateCheckResult::Error(e) => {
-                        self.update_state = UpdateState::Error(e.clone());
-                        // Only show error toast for manual checks
-                        if self.startup_check_done {
-                            self.show_toast_error(&t!("toast.update_check_failed", error = &e));
-                        }
-                    }
-                }
-                self.update_check_receiver = None;
-                self.startup_check_done = true;
-            }
-        }
-
-        // Check for download completion
-        if let Some(receiver) = &self.update_download_receiver {
-            if let Ok(result) = receiver.try_recv() {
-                match result {
-                    DownloadResult::Success(path) => {
-                        self.update_state = UpdateState::ReadyToInstall(path);
-                        self.show_toast_success(&t!("toast.update_downloaded"));
-                    }
-                    DownloadResult::Error(e) => {
-                        self.update_state = UpdateState::Error(e.clone());
-                        self.show_toast_error(&t!("toast.download_failed", error = &e));
-                    }
-                }
-                self.update_download_receiver = None;
-            }
-        }
-    }
-
-    /// Check for updates on startup (runs once)
-    fn check_startup_update(&mut self) {
-        if !self.startup_check_done && self.auto_check_updates {
-            self.start_update_check();
-        }
-    }
-
-    // ========================================================================
     // Spec Refresh (Background)
     // ========================================================================
 
@@ -1850,6 +1832,7 @@ impl UltraLogApp {
     fn stop_playback(&mut self) {
         self.is_playing = false;
         self.last_frame_time = None;
+        self.playback_record_position = None;
     }
 
     // ========================================================================
@@ -2051,26 +2034,29 @@ impl UltraLogApp {
     }
 }
 
+fn truncate_discord_activity_field(value: String) -> String {
+    const MAX_DISCORD_ACTIVITY_FIELD_CHARS: usize = 128;
+
+    if value.chars().count() <= MAX_DISCORD_ACTIVITY_FIELD_CHARS {
+        return value;
+    }
+
+    let mut truncated: String = value
+        .chars()
+        .take(MAX_DISCORD_ACTIVITY_FIELD_CHARS.saturating_sub(3))
+        .collect();
+    truncated.push_str("...");
+    truncated
+}
+
 // ============================================================================
 // eframe::App Implementation
 // ============================================================================
 
-impl eframe::App for UltraLogApp {
+impl eframe::App for SnowLVApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // Exit if update installation requires it (updater script is waiting)
-        if self.should_exit_for_update {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
-        }
-
-        // Check for updates on startup (runs once)
-        self.check_startup_update();
-
         // Start spec refresh from API in background (runs once)
         self.start_spec_refresh();
-
-        // Check for completed update operations
-        self.check_update_complete();
 
         // Check for completed background loads
         self.check_loading_complete();
@@ -2087,16 +2073,13 @@ impl eframe::App for UltraLogApp {
         // Handle IPC commands from MCP server
         self.process_ipc_commands();
 
-        // Apply dark theme
-        ctx.set_visuals(egui::Visuals::dark());
+        // Keep Discord Rich Presence in sync with the active log view.
+        self.update_discord_presence();
 
-        // Request repaint while loading or updating (for spinner animation)
-        if matches!(self.loading_state, LoadingState::Loading(_))
-            || matches!(
-                self.update_state,
-                UpdateState::Checking | UpdateState::Downloading
-            )
-        {
+        ctx.set_visuals(self.theme().visuals());
+
+        // Request repaint while loading (for spinner animation)
+        if matches!(self.loading_state, LoadingState::Loading(_)) {
             ctx.request_repaint();
         }
 
@@ -2110,51 +2093,36 @@ impl eframe::App for UltraLogApp {
 
         // Modal windows
         self.render_normalization_editor(ctx);
-        self.render_update_dialog(ctx);
         self.render_computed_channels_manager(ctx);
         self.render_formula_editor(ctx);
         self.render_analysis_panel(ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Menu bar at top with padding
-        let menu_frame = egui::Frame::NONE.inner_margin(egui::Margin {
-            left: 10,
-            right: 10,
-            top: 8,
-            bottom: 8,
-        });
-
-        egui::Panel::top("menu_bar")
-            .frame(menu_frame)
-            .show_inside(ui, |ui| {
-                self.render_menu_bar(ui);
-            });
-
-        // Tool switcher panel (pill tabs)
-        let tool_switcher_frame = egui::Frame::NONE
-            .fill(egui::Color32::from_rgb(35, 35, 35))
+        let theme = self.theme();
+        let header_frame = egui::Frame::NONE
+            .fill(theme.color(theme.panel_alt))
             .inner_margin(egui::Margin {
-                left: 10,
-                right: 10,
-                top: 8,
-                bottom: 8,
+                left: 8,
+                right: 8,
+                top: 4,
+                bottom: 4,
             });
 
-        egui::Panel::top("tool_switcher")
-            .frame(tool_switcher_frame)
+        egui::Panel::top("app_header")
+            .frame(header_frame)
             .show_inside(ui, |ui| {
-                self.render_tool_switcher(ui);
+                self.render_app_header(ui);
             });
 
         // Panel background color
-        let panel_bg = egui::Color32::from_rgb(45, 45, 45);
+        let panel_bg = theme.color(theme.panel);
         let panel_frame = egui::Frame::NONE
             .fill(panel_bg)
             .inner_margin(egui::Margin::symmetric(10, 10));
 
         // Activity bar (far left, narrow icon strip)
-        let activity_bar_bg = egui::Color32::from_rgb(35, 35, 35);
+        let activity_bar_bg = theme.color(theme.panel_alt);
         let activity_bar_frame = egui::Frame::NONE
             .fill(activity_bar_bg)
             .inner_margin(egui::Margin::symmetric(4, 8));
@@ -2198,28 +2166,28 @@ impl eframe::App for UltraLogApp {
         egui::CentralPanel::default().show_inside(ui, |ui| {
             match self.active_tool {
                 ActiveTool::LogViewer => {
-                    // Tab bar at top (Chrome-style tabs for log files)
-                    self.render_tab_bar(ui);
-
-                    // Selected channels below tabs
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     self.render_selected_channels(ui);
 
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     ui.separator();
 
                     // Chart takes remaining space
                     self.render_chart(ui);
                 }
                 ActiveTool::ScatterPlot => {
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     self.render_scatter_plot_view(ui);
                 }
                 ActiveTool::Histogram => {
-                    ui.add_space(10.0);
+                    ui.add_space(6.0);
                     self.render_histogram_view(ui);
                 }
             }
         });
+    }
+
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        self.discord_presence.shutdown();
     }
 }

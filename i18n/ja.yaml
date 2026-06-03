@@ -1,4 +1,4 @@
-# Japanese translations for UltraLog (日本語)
+# Japanese translations for SnowLV (日本語)
 
 # Menu bar (src/ui/menu.rs)
 menu:
@@ -60,8 +60,6 @@ settings:
   cursor_tracking: "カーソル追従"
   cursor_tracking_desc: "スクラブ中にカーソルを中央に保持"
   window: "ウィンドウ:"
-  scroll_to_zoom: "スクロールしてズーム"
-  scroll_to_zoom_desc: "マウスホイールでチャートを直接ズームします（パンの代わりに）"
   show_grid: "グリッドを表示"
   show_grid_desc: "チャートの背景グリッドを描画"
   grid_opacity: "不透明度:"
@@ -142,7 +140,7 @@ update:
   download_complete: "ダウンロード完了！"
   install_instructions: "インストールをクリックしてアップデートを適用してください。"
   windows_restart: "アプリケーションは自動的に閉じて再起動します。"
-  macos_dmg: "DMGが開きます - UltraLogをアプリケーションフォルダにドラッグしてください。"
+  macos_dmg: "DMGが開きます - SnowLVをアプリケーションフォルダにドラッグしてください。"
   linux_restart: "アプリケーションは自動的に閉じて再起動します。"
   install_now: "今すぐインストール"
   install_later: "後でインストール"

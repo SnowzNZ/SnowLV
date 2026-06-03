@@ -1,4 +1,4 @@
-//! Internationalization support for UltraLog.
+//! Internationalization support for SnowLV.
 //!
 //! This module provides language selection and locale management.
 

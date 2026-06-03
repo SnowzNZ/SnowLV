@@ -2,11 +2,11 @@
 
 use eframe::egui;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::normalize::{normalize_channel_name_with_custom, sort_channels_by_priority};
 use crate::state::MAX_CHANNELS;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render channel selection panel - fills available space
     pub fn render_channel_selection(&mut self, ui: &mut egui::Ui) {
         // Pre-compute scaled font sizes
@@ -276,6 +276,7 @@ impl UltraLogApp {
             color: egui::Color32,
             display_name: String,
             is_computed: bool,
+            hidden: bool,
             min_str: Option<String>,
             max_str: Option<String>,
             min_record: Option<usize>,
@@ -377,6 +378,7 @@ impl UltraLogApp {
                 color: color32,
                 display_name,
                 is_computed: selected.channel.is_computed(),
+                hidden: selected.hidden,
                 min_str,
                 max_str,
                 min_record,
@@ -387,14 +389,26 @@ impl UltraLogApp {
         }
 
         let mut channel_to_remove: Option<usize> = None;
+        let mut channel_to_toggle_hidden: Option<usize> = None;
         let mut jump_to: Option<(usize, f64)> = None; // (record, time)
 
         egui::ScrollArea::horizontal().show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (i, card) in channel_cards.iter().enumerate() {
+                    let card_stroke_color = if card.hidden {
+                        egui::Color32::GRAY
+                    } else {
+                        card.color
+                    };
+                    let card_fill_color = if card.hidden {
+                        egui::Color32::from_rgb(32, 32, 32)
+                    } else {
+                        egui::Color32::from_rgb(40, 40, 40)
+                    };
+
                     egui::Frame::NONE
-                        .fill(egui::Color32::from_rgb(40, 40, 40))
-                        .stroke(egui::Stroke::new(2.0, card.color))
+                        .fill(card_fill_color)
+                        .stroke(egui::Stroke::new(2.0, card_stroke_color))
                         .corner_radius(5)
                         .inner_margin(10.0)
                         .show(ui, |ui| {
@@ -487,6 +501,35 @@ impl UltraLogApp {
                                 // Close button in top right
                                 ui.add_space(8.0);
                                 ui.vertical(|ui| {
+                                    let icon_color = if card.hidden {
+                                        egui::Color32::LIGHT_GRAY
+                                    } else {
+                                        card.color
+                                    };
+                                    let (icon_rect, visibility_btn) = ui.allocate_exact_size(
+                                        egui::vec2(22.0, 22.0),
+                                        egui::Sense::click(),
+                                    );
+                                    crate::ui::icons::draw_eye_icon(
+                                        ui,
+                                        icon_rect.center(),
+                                        16.0,
+                                        icon_color,
+                                        card.hidden,
+                                    );
+                                    let visibility_btn =
+                                        visibility_btn.on_hover_text(if card.hidden {
+                                            "Show channel"
+                                        } else {
+                                            "Hide channel"
+                                        });
+                                    if visibility_btn.clicked() {
+                                        channel_to_toggle_hidden = Some(i);
+                                    }
+                                    if visibility_btn.hovered() {
+                                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                                    }
+
                                     let close_btn = ui.add(
                                         egui::Button::new(
                                             egui::RichText::new("x")
@@ -525,6 +568,10 @@ impl UltraLogApp {
 
         if let Some(index) = channel_to_remove {
             self.remove_channel(index);
+        }
+
+        if let Some(index) = channel_to_toggle_hidden {
+            self.toggle_channel_hidden(index);
         }
 
         if selected_channels.is_empty() {

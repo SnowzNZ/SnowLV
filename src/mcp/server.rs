@@ -1,7 +1,7 @@
-//! MCP Server implementation for UltraLog
+//! MCP Server implementation for SnowLV
 //!
 //! This module implements the MCP protocol server that allows Claude to
-//! interact with UltraLog through the Model Context Protocol.
+//! interact with SnowLV through the Model Context Protocol.
 //!
 //! The server runs as an HTTP service on a configurable port (default 52385)
 //! and Claude Desktop can connect to it at `http://localhost:52385/mcp`
@@ -96,7 +96,7 @@ async fn run_mcp_http_server(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Create the MCP service that creates new server instances for each session
     let service = StreamableHttpService::new(
-        move || Ok(UltraLogMcpServer::with_ipc_port(ipc_port)),
+        move || Ok(SnowLVMcpServer::with_ipc_port(ipc_port)),
         LocalSessionManager::default().into(),
         Default::default(),
     );
@@ -124,21 +124,21 @@ async fn run_mcp_http_server(
     Ok(())
 }
 
-/// UltraLog MCP Server
+/// SnowLV MCP Server
 #[derive(Clone)]
-pub struct UltraLogMcpServer {
+pub struct SnowLVMcpServer {
     client: Arc<GuiClient>,
-    tool_router: ToolRouter<UltraLogMcpServer>,
+    tool_router: ToolRouter<SnowLVMcpServer>,
 }
 
-impl UltraLogMcpServer {
+impl SnowLVMcpServer {
     pub fn new() -> Self {
         Self::with_ipc_port(DEFAULT_IPC_PORT)
     }
 
     pub fn with_ipc_port(ipc_port: u16) -> Self {
         tracing::info!(
-            "Creating new UltraLogMcpServer instance for IPC port {}",
+            "Creating new SnowLVMcpServer instance for IPC port {}",
             ipc_port
         );
         let router = Self::tool_router();
@@ -167,7 +167,7 @@ impl UltraLogMcpServer {
     }
 }
 
-impl Default for UltraLogMcpServer {
+impl Default for SnowLVMcpServer {
     fn default() -> Self {
         Self::new()
     }
@@ -306,9 +306,9 @@ pub struct EmptyRequest {}
 // ============================================================================
 
 #[tool_router]
-impl UltraLogMcpServer {
+impl SnowLVMcpServer {
     #[tool(
-        description = "Get the current state of UltraLog including loaded files, selected channels, cursor position, and view mode."
+        description = "Get the current state of SnowLV including loaded files, selected channels, cursor position, and view mode."
     )]
     async fn get_state(
         &self,
@@ -454,7 +454,7 @@ impl UltraLogMcpServer {
     }
 
     #[tool(
-        description = "Add a channel to the chart display. The user will see this channel visualized in the UltraLog GUI."
+        description = "Add a channel to the chart display. The user will see this channel visualized in the SnowLV GUI."
     )]
     async fn select_channel(
         &self,
@@ -803,21 +803,21 @@ impl UltraLogMcpServer {
 }
 
 #[tool_handler]
-impl ServerHandler for UltraLogMcpServer {
+impl ServerHandler for SnowLVMcpServer {
     fn get_info(&self) -> ServerInfo {
         tracing::info!("get_info called - returning server capabilities");
         ServerInfo {
             protocol_version: ProtocolVersion::V_2024_11_05,
             capabilities: ServerCapabilities::builder().enable_tools().build(),
             server_info: Implementation {
-                name: "ultralog".into(),
+                name: "snowlv".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
                 title: None,
                 icons: None,
                 website_url: None,
             },
             instructions: Some(
-                "UltraLog MCP Server - Control the UltraLog ECU log viewer application. \
+                "SnowLV MCP Server - Control the SnowLV ECU log viewer application. \
                 Use get_state to see loaded files and current view. \
                 Load files, select channels to display, create computed channels, \
                 and analyze ECU telemetry data."

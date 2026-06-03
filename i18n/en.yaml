@@ -1,4 +1,4 @@
-# English translations for UltraLog
+# English translations for SnowLV
 
 # Menu bar (src/ui/menu.rs)
 menu:
@@ -54,19 +54,21 @@ settings:
   language: "Language"
   language_desc: "Select display language"
   display: "Display"
+  theme: "Theme:"
   color_blind_mode: "Color Blind Mode"
   color_blind_desc: "Use accessible color palette (Wong's palette)"
   font_size: "Font Size:"
-  cursor_tracking: "Cursor Tracking"
-  cursor_tracking_desc: "Keep cursor centered while scrubbing"
+  cursor_tracking: "Playhead Tracking"
+  cursor_tracking_desc: "Keep playhead centered while scrubbing"
   window: "Window:"
-  scroll_to_zoom: "Scroll to Zoom"
-  scroll_to_zoom_desc: "Scroll wheel zooms the chart directly instead of panning"
-  drag_to_pan: "Drag to Pan"
-  drag_to_pan_desc: "Drag the chart to pan the visible time range left and right"
+  values_follow_cursor: "Values Follow Mouse"
+  values_follow_cursor_desc: "Show live channel values beside the mouse pointer instead of in the chart legend"
   show_grid: "Show Grid"
   show_grid_desc: "Draw the chart background grid"
   grid_opacity: "Opacity:"
+  discord_rpc: "Discord RPC"
+  discord_rpc_show_log_filename: "Show Log File Name"
+  discord_rpc_show_log_filename_desc: "Include the active log file name in Discord Rich Presence"
   field_names: "Field Names"
   field_normalization: "Field Normalization"
   field_normalization_desc: "Standardize channel names across ECU types"
@@ -95,6 +97,7 @@ settings:
 # Timeline (src/ui/timeline.rs)
 timeline:
   speed: "Speed:"
+  logger_rate: "Logger FPS/Hz"
   time: "Time: %{time}"
   record: "Record %{current} of %{total}"
 
@@ -144,7 +147,7 @@ update:
   download_complete: "Download complete!"
   install_instructions: "Click Install to apply the update."
   windows_restart: "The application will close and restart automatically."
-  macos_dmg: "The DMG will open - drag UltraLog to Applications."
+  macos_dmg: "The DMG will open - drag SnowLV to Applications."
   linux_restart: "The application will close and restart automatically."
   install_now: "Install Now"
   install_later: "Install Later"

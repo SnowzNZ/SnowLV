@@ -1,6 +1,6 @@
-//! Analytics module for UltraLog using PostHog.
+//! Analytics module for SnowLV using PostHog.
 //!
-//! This module provides anonymous usage analytics to help improve UltraLog.
+//! This module provides anonymous usage analytics to help improve SnowLV.
 //! All data is anonymous - we only track feature usage, not personal information.
 
 use serde::Serialize;
@@ -8,7 +8,7 @@ use std::collections::HashMap;
 use std::sync::{mpsc, OnceLock};
 use uuid::Uuid;
 
-/// PostHog API key for UltraLog analytics
+/// PostHog API key for SnowLV analytics
 const POSTHOG_API_KEY: &str = "phc_jrZkZhkhoHXknLz7djnuBR8s4tl9mZnR00UAWVl2GHO";
 
 /// PostHog API endpoint
@@ -174,18 +174,6 @@ pub fn track_playback_started(speed: f64) {
     event
         .properties
         .insert("speed".to_string(), serde_json::json!(speed));
-
-    capture_event(event);
-}
-
-/// Track update check
-pub fn track_update_checked(update_available: bool) {
-    let mut event = create_event("update_checked");
-
-    event.properties.insert(
-        "update_available".to_string(),
-        serde_json::json!(update_available),
-    );
 
     capture_event(event);
 }

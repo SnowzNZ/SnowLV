@@ -1,4 +1,4 @@
-//! TCP client for communicating with the UltraLog GUI's IPC server
+//! TCP client for communicating with the SnowLV GUI's IPC server
 
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpStream;
@@ -7,7 +7,7 @@ use std::time::Duration;
 use crate::ipc::commands::{IpcCommand, IpcResponse};
 use crate::ipc::DEFAULT_IPC_PORT;
 
-/// Client for communicating with the UltraLog GUI
+/// Client for communicating with the SnowLV GUI
 ///
 /// Each command creates a new TCP connection to avoid stale connection issues.
 /// The IPC server handles one command per connection.
@@ -38,7 +38,7 @@ impl GuiClient {
             .parse()
             .map_err(|e| format!("Invalid address: {}", e))?;
         let stream = TcpStream::connect_timeout(&socket_addr, Duration::from_secs(5))
-            .map_err(|e| format!("Failed to connect to UltraLog GUI at {}: {}", addr, e))?;
+            .map_err(|e| format!("Failed to connect to SnowLV GUI at {}: {}", addr, e))?;
 
         stream
             .set_read_timeout(Some(Duration::from_secs(30)))

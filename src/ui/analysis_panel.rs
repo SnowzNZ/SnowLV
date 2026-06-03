@@ -8,12 +8,12 @@ use eframe::egui;
 use rust_i18n::t;
 
 use crate::analysis::{AnalysisResult, Analyzer, AnalyzerConfig, LogDataAccess};
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::computed::{ComputedChannel, ComputedChannelTemplate};
 use crate::normalize::sort_channels_by_priority;
 use crate::parsers::types::ComputedChannelInfo;
 use crate::parsers::Channel;
-use crate::state::{SelectedChannel, CHART_COLORS};
+use crate::state::SelectedChannel;
 
 /// Info about an analyzer for display (avoids borrow issues)
 struct AnalyzerInfo {
@@ -45,7 +45,7 @@ enum ParamType {
 /// Category IDs for the tab bar (must match analyzer.category())
 const CATEGORY_IDS: &[&str] = &["all", "Filters", "Statistics", "AFR", "Derived"];
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the analysis panel window
     pub fn render_analysis_panel(&mut self, ctx: &egui::Context) {
         if !self.show_analysis_panel {
@@ -736,7 +736,7 @@ impl UltraLogApp {
             .iter()
             .map(|c| c.color_index)
             .collect();
-        let color_index = (0..CHART_COLORS.len())
+        let color_index = (0..self.chart_palette_len())
             .find(|&i| !used_colors.contains(&i))
             .unwrap_or(0);
 
@@ -753,6 +753,7 @@ impl UltraLogApp {
             channel_index: virtual_channel_index,
             channel,
             color_index,
+            hidden: false,
         });
 
         self.show_toast_success(&t!("toast.added_to_chart", name = result.name));

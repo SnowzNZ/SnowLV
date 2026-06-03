@@ -2,7 +2,7 @@
 
 use eframe::egui;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::state::ActivePanel;
 
 /// Width of the activity bar in pixels
@@ -15,7 +15,7 @@ const ICON_SIZE: f32 = 24.0;
 #[allow(dead_code)]
 const ICON_PADDING: f32 = 12.0;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the activity bar (vertical icon strip on the far left)
     pub fn render_activity_bar(&mut self, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
@@ -38,24 +38,25 @@ impl UltraLogApp {
     /// Render a single activity bar icon button
     fn render_activity_icon(&mut self, ui: &mut egui::Ui, panel: ActivePanel, is_selected: bool) {
         let button_size = egui::vec2(ACTIVITY_BAR_WIDTH - 8.0, ACTIVITY_BAR_WIDTH - 8.0);
+        let theme = self.theme();
 
         // Colors
         let bg_color = if is_selected {
-            egui::Color32::from_rgb(60, 60, 60)
+            theme.color(theme.selection)
         } else {
             egui::Color32::TRANSPARENT
         };
 
         let icon_color = if is_selected {
-            egui::Color32::WHITE
+            theme.color(theme.text)
         } else {
-            egui::Color32::from_rgb(150, 150, 150)
+            theme.color(theme.muted_text)
         };
 
-        let hover_bg = egui::Color32::from_rgb(50, 50, 50);
+        let hover_bg = theme.color(theme.card_hover);
 
         // Selected indicator bar on the left
-        let indicator_color = egui::Color32::from_rgb(113, 120, 78); // Olive green accent
+        let indicator_color = theme.color(theme.accent);
 
         let (rect, response) = ui.allocate_exact_size(button_size, egui::Sense::click());
 

@@ -8,7 +8,7 @@ use eframe::egui;
 use rust_i18n::t;
 use std::fs;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::normalize::sort_channels_by_priority;
 use crate::state::{
     HistogramMode, PastedTable, SampleFilter, SelectedHistogramCell, SortOrder, TableOperation,
@@ -53,6 +53,15 @@ const CURSOR_CROSSHAIR_COLOR: egui::Color32 = egui::Color32::from_rgb(128, 128, 
 /// Maximum length for axis labels before truncation
 const MAX_AXIS_LABEL_LENGTH: usize = 20;
 
+struct HistogramLegendParams<'a> {
+    min_value: f64,
+    max_value: f64,
+    label: &'a str,
+    mode: HistogramMode,
+    precision: usize,
+    selected_cell: Option<&'a SelectedHistogramCell>,
+}
+
 /// Calculate which bin a normalized value (0.0 to 1.0) falls into
 /// Uses floor-based calculation for consistent cell boundaries
 #[inline]
@@ -78,14 +87,13 @@ fn calculate_data_bin_for_breakpoints(value: f64, breakpoints: &[f64]) -> usize 
         .position(|&boundary| value < boundary)
         .unwrap_or(breakpoints.len());
 
-    let bin = if idx == 0 {
+    if idx == 0 {
         0
     } else if idx >= breakpoints.len() {
         bin_count - 1
     } else {
         idx - 1
-    };
-    bin
+    }
 }
 
 /// Apply axis sort order to a bin index
@@ -179,7 +187,7 @@ fn axis_bin_value_range(
     };
 
     if let Some(breakpoints) = breakpoints {
-        if breakpoints.len() >= grid_size + 1 && raw_index < grid_size {
+        if breakpoints.len() > grid_size && raw_index < grid_size {
             let start = breakpoints[raw_index];
             let end = breakpoints[raw_index + 1];
             return if start <= end {
@@ -344,7 +352,7 @@ fn get_aaa_text_color(background: egui::Color32) -> egui::Color32 {
     }
 }
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Main entry point: render the histogram view
     pub fn render_histogram_view(&mut self, ui: &mut egui::Ui) {
         if self.active_tab.is_none() || self.files.is_empty() {
@@ -357,10 +365,6 @@ impl UltraLogApp {
             });
             return;
         }
-
-        // Render tab bar
-        self.render_tab_bar(ui);
-        ui.add_space(10.0);
 
         // Controls are now in the sidebar (tool properties panel)
         // Render the histogram grid
@@ -1842,8 +1846,7 @@ impl UltraLogApp {
             let y_pos = plot_rect.bottom() - (i as f32 + 0.5) * cell_height;
             let label_text = format_histogram_value(*value, config.decimal_precision);
             let label_width = (label_text.len() as f32 * font_10 * 0.55 + 16.0)
-                .min(AXIS_LABEL_MARGIN_LEFT - 10.0)
-                .max(16.0);
+                .clamp(16.0, AXIS_LABEL_MARGIN_LEFT - 10.0);
             let label_height = font_10 + 8.0;
             let label_size = egui::vec2(label_width, label_height);
             let label_rect = egui::Rect::from_center_size(
@@ -2318,9 +2321,7 @@ impl UltraLogApp {
         // Render legend with selected cell info
         ui.add_space(8.0);
         let selected_cell = config.selected_cell.as_ref();
-        let legend_label = if use_hit_count_heatmap {
-            "Hits:"
-        } else if mode == HistogramMode::HitCount {
+        let legend_label = if use_hit_count_heatmap || mode == HistogramMode::HitCount {
             "Hits:"
         } else {
             "Value:"
@@ -2332,12 +2333,14 @@ impl UltraLogApp {
         };
         self.render_histogram_legend(
             ui,
-            legend_min,
-            max_color_value,
-            legend_label,
-            mode,
-            precision,
-            selected_cell,
+            HistogramLegendParams {
+                min_value: legend_min,
+                max_value: max_color_value,
+                label: legend_label,
+                mode,
+                precision,
+                selected_cell,
+            },
         );
 
         self.tabs[tab_idx].histogram_state.config = config;
@@ -2366,18 +2369,17 @@ impl UltraLogApp {
     }
 
     /// Render the legend with color scale and cell statistics
-    fn render_histogram_legend(
-        &self,
-        ui: &mut egui::Ui,
-        min_value: f64,
-        max_value: f64,
-        label: &str,
-        mode: HistogramMode,
-        precision: usize,
-        selected_cell: Option<&SelectedHistogramCell>,
-    ) {
+    fn render_histogram_legend(&self, ui: &mut egui::Ui, params: HistogramLegendParams<'_>) {
         let font_12 = self.scaled_font(12.0);
         let font_13 = self.scaled_font(13.0);
+        let HistogramLegendParams {
+            min_value,
+            max_value,
+            label,
+            mode,
+            precision,
+            selected_cell,
+        } = params;
 
         ui.horizontal(|ui| {
             ui.add_space(4.0);

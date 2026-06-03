@@ -11,8 +11,8 @@ mod common;
 use common::assertions::*;
 use common::example_files::*;
 use common::{example_file_exists, get_example_file_path, read_example_binary};
+use snowlv::parsers::aim::Aim;
 use std::path::Path;
-use ultralog::parsers::aim::Aim;
 
 // ============================================
 // Format Detection Tests

@@ -6,7 +6,7 @@
 use eframe::egui;
 use rust_i18n::t;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::computed::{ComputedChannel, ComputedChannelTemplate};
 use crate::expression::{
     build_channel_bindings, compute_all_channel_statistics, evaluate_all_records,
@@ -14,9 +14,9 @@ use crate::expression::{
 };
 use crate::parsers::types::ComputedChannelInfo;
 use crate::parsers::Channel;
-use crate::state::{SelectedChannel, CHART_COLORS};
+use crate::state::SelectedChannel;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the computed channels manager window
     pub fn render_computed_channels_manager(&mut self, ctx: &egui::Context) {
         if !self.show_computed_channels_manager {
@@ -664,7 +664,7 @@ impl UltraLogApp {
             .iter()
             .map(|c| c.color_index)
             .collect();
-        let color_index = (0..CHART_COLORS.len())
+        let color_index = (0..self.chart_palette_len())
             .find(|i| !used_colors.contains(i))
             .unwrap_or(0);
 
@@ -680,6 +680,7 @@ impl UltraLogApp {
             channel_index: virtual_channel_index,
             channel,
             color_index,
+            hidden: false,
         });
 
         self.show_toast_success(&t!("toast.added_to_chart", name = computed.name()));

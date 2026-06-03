@@ -2,7 +2,7 @@
 set -e
 
 # =============================================================================
-# UltraLog Local Release Build Script
+# SnowLV Local Release Build Script
 # =============================================================================
 # This script builds release binaries for all platforms from your Mac.
 #
@@ -30,8 +30,8 @@ NC='\033[0m' # No Color
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 OUTPUT_DIR="$PROJECT_DIR/dist"
-APP_NAME="UltraLog"
-BUNDLE_ID="com.ultralog.app"
+APP_NAME="SnowLV"
+BUNDLE_ID="com.snowlv.app"
 VERSION=$(grep '^version' "$PROJECT_DIR/Cargo.toml" | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
 print_header() {
@@ -160,8 +160,8 @@ create_app_bundle() {
     mkdir -p "$APP_DIR/Contents/Resources"
 
     # Copy binary
-    cp "$BINARY_PATH" "$APP_DIR/Contents/MacOS/ultralog"
-    chmod +x "$APP_DIR/Contents/MacOS/ultralog"
+    cp "$BINARY_PATH" "$APP_DIR/Contents/MacOS/snowlv"
+    chmod +x "$APP_DIR/Contents/MacOS/snowlv"
 
     # Create Info.plist
     cat > "$APP_DIR/Contents/Info.plist" << EOF
@@ -182,7 +182,7 @@ create_app_bundle() {
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleExecutable</key>
-    <string>ultralog</string>
+    <string>snowlv</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>
@@ -283,8 +283,8 @@ build_macos() {
     print_success "ARM build complete"
 
     # Create app bundles
-    create_app_bundle "intel" "$PROJECT_DIR/target/x86_64-apple-darwin/release/ultralog"
-    create_app_bundle "arm64" "$PROJECT_DIR/target/aarch64-apple-darwin/release/ultralog"
+    create_app_bundle "intel" "$PROJECT_DIR/target/x86_64-apple-darwin/release/snowlv"
+    create_app_bundle "arm64" "$PROJECT_DIR/target/aarch64-apple-darwin/release/snowlv"
 
     # Create DMGs
     create_dmg_file "intel"
@@ -312,10 +312,10 @@ build_linux() {
 
     # Package
     mkdir -p "$OUTPUT_DIR"
-    cp "$PROJECT_DIR/target/x86_64-unknown-linux-gnu/release/ultralog" "$OUTPUT_DIR/ultralog-linux"
-    chmod +x "$OUTPUT_DIR/ultralog-linux"
-    (cd "$OUTPUT_DIR" && tar -czvf ultralog-linux.tar.gz ultralog-linux && rm ultralog-linux)
-    print_success "Packaged: $OUTPUT_DIR/ultralog-linux.tar.gz"
+    cp "$PROJECT_DIR/target/x86_64-unknown-linux-gnu/release/snowlv" "$OUTPUT_DIR/snowlv-linux"
+    chmod +x "$OUTPUT_DIR/snowlv-linux"
+    (cd "$OUTPUT_DIR" && tar -czvf snowlv-linux.tar.gz snowlv-linux && rm snowlv-linux)
+    print_success "Packaged: $OUTPUT_DIR/snowlv-linux.tar.gz"
 }
 
 # Build Windows
@@ -333,14 +333,14 @@ build_windows() {
 
     # Package
     mkdir -p "$OUTPUT_DIR"
-    cp "$PROJECT_DIR/target/x86_64-pc-windows-msvc/release/ultralog.exe" "$OUTPUT_DIR/ultralog-windows.exe"
-    (cd "$OUTPUT_DIR" && zip ultralog-windows.zip ultralog-windows.exe && rm ultralog-windows.exe)
-    print_success "Packaged: $OUTPUT_DIR/ultralog-windows.zip"
+    cp "$PROJECT_DIR/target/x86_64-pc-windows-msvc/release/snowlv.exe" "$OUTPUT_DIR/snowlv-windows.exe"
+    (cd "$OUTPUT_DIR" && zip snowlv-windows.zip snowlv-windows.exe && rm snowlv-windows.exe)
+    print_success "Packaged: $OUTPUT_DIR/snowlv-windows.zip"
 }
 
 # Install locally (macOS only)
 install_local() {
-    print_header "Installing UltraLog locally"
+    print_header "Installing SnowLV locally"
 
     # Detect architecture
     ARCH=$(uname -m)
@@ -363,11 +363,11 @@ install_local() {
         if [ "$APP_ARCH" = "arm64" ]; then
             echo "Building aarch64-apple-darwin (Apple Silicon)..."
             cargo build --release --target aarch64-apple-darwin
-            create_app_bundle "arm64" "$PROJECT_DIR/target/aarch64-apple-darwin/release/ultralog"
+            create_app_bundle "arm64" "$PROJECT_DIR/target/aarch64-apple-darwin/release/snowlv"
         else
             echo "Building x86_64-apple-darwin (Intel)..."
             cargo build --release --target x86_64-apple-darwin
-            create_app_bundle "intel" "$PROJECT_DIR/target/x86_64-apple-darwin/release/ultralog"
+            create_app_bundle "intel" "$PROJECT_DIR/target/x86_64-apple-darwin/release/snowlv"
         fi
     fi
 
@@ -387,9 +387,9 @@ install_local() {
     print_success "Installed: $APP_DEST"
     echo ""
     echo "You can now:"
-    echo "  - Open UltraLog from Spotlight (Cmd+Space, type 'UltraLog')"
-    echo "  - Open UltraLog from Finder → Applications"
-    echo "  - Run from terminal: open -a UltraLog"
+    echo "  - Open SnowLV from Spotlight (Cmd+Space, type 'SnowLV')"
+    echo "  - Open SnowLV from Finder → Applications"
+    echo "  - Run from terminal: open -a SnowLV"
 }
 
 # Build all platforms

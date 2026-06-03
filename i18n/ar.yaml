@@ -1,4 +1,4 @@
-# Arabic translations for UltraLog (العربية)
+# Arabic translations for SnowLV (العربية)
 
 # Menu bar (src/ui/menu.rs)
 menu:
@@ -60,8 +60,6 @@ settings:
   cursor_tracking: "تتبع المؤشر"
   cursor_tracking_desc: "إبقاء المؤشر في المنتصف أثناء التمرير"
   window: "النافذة:"
-  scroll_to_zoom: "التمرير للتكبير"
-  scroll_to_zoom_desc: "عجلة الماوس تكبر المخطط مباشرة بدلاً من الإزاحة"
   show_grid: "إظهار الشبكة"
   show_grid_desc: "رسم شبكة الخلفية للرسم البياني"
   grid_opacity: "الشفافية:"
@@ -142,7 +140,7 @@ update:
   download_complete: "اكتمل التنزيل!"
   install_instructions: "انقر على تثبيت لتطبيق التحديث."
   windows_restart: "سيتم إغلاق التطبيق وإعادة تشغيله تلقائيًا."
-  macos_dmg: "سيتم فتح DMG - اسحب UltraLog إلى التطبيقات."
+  macos_dmg: "سيتم فتح DMG - اسحب SnowLV إلى التطبيقات."
   linux_restart: "سيتم إغلاق التطبيق وإعادة تشغيله تلقائيًا."
   install_now: "تثبيت الآن"
   install_later: "تثبيت لاحقًا"

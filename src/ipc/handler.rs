@@ -4,14 +4,14 @@
 
 use std::path::PathBuf;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::computed::{ComputedChannel, ComputedChannelTemplate};
 use crate::expression;
 use crate::state::ActiveTool;
 
 use super::commands::*;
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Handle an incoming IPC command and return a response
     pub fn handle_ipc_command(&mut self, command: IpcCommand) -> IpcResponse {
         match command {

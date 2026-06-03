@@ -13,8 +13,8 @@ mod common;
 use common::assertions::*;
 use common::example_files::*;
 use common::{example_file_exists, read_example_binary};
-use ultralog::parsers::link::Link;
-use ultralog::parsers::types::Parseable;
+use snowlv::parsers::link::Link;
+use snowlv::parsers::types::Parseable;
 
 /// A Link log's time axis must be physically plausible:
 /// - last timestamp is finite
@@ -23,7 +23,7 @@ use ultralog::parsers::types::Parseable;
 ///
 /// The pre-fix parser produced time ranges of ~89477s (24.8 hours) with subnormal
 /// near-zero timestamps, which this asserts against.
-fn assert_plausible_link_timing(log: &ultralog::parsers::types::Log) {
+fn assert_plausible_link_timing(log: &snowlv::parsers::types::Log) {
     let times = log.get_times_as_f64();
     assert!(!times.is_empty(), "Log should have timestamps");
     let last = *times.last().unwrap();
@@ -51,7 +51,7 @@ fn assert_plausible_link_timing(log: &ultralog::parsers::types::Log) {
 /// The pre-fix parser returned all-zero values for every channel. Any real Link
 /// log has RPM, MAP, lambda etc. with values in the hundreds, thousands, or fractions.
 /// Assert at least 10% of samples in at least one channel are nonzero.
-fn assert_has_real_values(log: &ultralog::parsers::types::Log) {
+fn assert_has_real_values(log: &snowlv::parsers::types::Log) {
     let mut any_channel_has_data = false;
     for ch_idx in 0..log.channels.len() {
         let values = log.get_channel_data(ch_idx);

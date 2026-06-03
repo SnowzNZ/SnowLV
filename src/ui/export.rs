@@ -7,7 +7,7 @@ use rust_i18n::t;
 use ::image::{Rgba, RgbaImage};
 
 use crate::analytics;
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::normalize::normalize_channel_name_with_custom;
 use crate::state::HistogramMode;
 
@@ -86,13 +86,13 @@ fn push_open_line(ops: &mut Vec<Op>, points: &[(f32, f32)]) {
     ops.push(Op::DrawLine { line });
 }
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Export the current chart view as PNG
     pub fn export_chart_png(&mut self) {
         // Show save dialog
         let Some(path) = rfd::FileDialog::new()
             .add_filter("PNG Image", &["png"])
-            .set_file_name("ultralog_chart.png")
+            .set_file_name("snowlv_chart.png")
             .save_file()
         else {
             return;
@@ -113,7 +113,7 @@ impl UltraLogApp {
         // Show save dialog
         let Some(path) = rfd::FileDialog::new()
             .add_filter("PDF Document", &["pdf"])
-            .set_file_name("ultralog_chart.pdf")
+            .set_file_name("snowlv_chart.pdf")
             .save_file()
         else {
             return;
@@ -171,6 +171,10 @@ impl UltraLogApp {
 
         // Draw each channel
         for selected in self.get_selected_channels() {
+            if selected.hidden {
+                continue;
+            }
+
             let color = self.get_channel_color(selected.color_index);
             let pixel_color = Rgba([color[0], color[1], color[2], 255]);
 
@@ -265,7 +269,7 @@ impl UltraLogApp {
         // Draw title
         push_text(
             &mut ops,
-            "UltraLog Chart Export",
+            "SnowLV Chart Export",
             16.0,
             Mm(margin as f32),
             Mm(200.0),
@@ -277,7 +281,10 @@ impl UltraLogApp {
             let subtitle = format!(
                 "{} | {} channels selected | Time: {:.1}s - {:.1}s",
                 file.name,
-                self.get_selected_channels().len(),
+                self.get_selected_channels()
+                    .iter()
+                    .filter(|channel| !channel.hidden)
+                    .count(),
                 min_time,
                 max_time
             );
@@ -308,6 +315,10 @@ impl UltraLogApp {
 
         // Draw each channel
         for selected in self.get_selected_channels() {
+            if selected.hidden {
+                continue;
+            }
+
             let color_rgb = self.get_channel_color(selected.color_index);
             let line_color = Color::Rgb(Rgb::new(
                 color_rgb[0] as f32 / 255.0,
@@ -384,6 +395,10 @@ impl UltraLogApp {
         let mut legend_x = chart_left;
 
         for selected in self.get_selected_channels() {
+            if selected.hidden {
+                continue;
+            }
+
             let color_rgb = self.get_channel_color(selected.color_index);
             let text_color = Color::Rgb(Rgb::new(
                 color_rgb[0] as f32 / 255.0,
@@ -418,7 +433,7 @@ impl UltraLogApp {
 
         // Build page and save PDF
         let page = PdfPage::new(Mm(297.0), Mm(210.0), ops);
-        let mut doc = PdfDocument::new("UltraLog Chart Export");
+        let mut doc = PdfDocument::new("SnowLV Chart Export");
         doc.with_pages(vec![page]);
         let mut warnings = Vec::new();
         let pdf_bytes = doc.save(&PdfSaveOptions::default(), &mut warnings);
@@ -432,7 +447,7 @@ impl UltraLogApp {
         // Show save dialog
         let Some(path) = rfd::FileDialog::new()
             .add_filter("PNG Image", &["png"])
-            .set_file_name("ultralog_histogram.png")
+            .set_file_name("snowlv_histogram.png")
             .save_file()
         else {
             return;
@@ -452,7 +467,7 @@ impl UltraLogApp {
         // Show save dialog
         let Some(path) = rfd::FileDialog::new()
             .add_filter("PNG Image", &["png"])
-            .set_file_name("ultralog_scatter_plot.png")
+            .set_file_name("snowlv_scatter_plot.png")
             .save_file()
         else {
             return;
@@ -472,7 +487,7 @@ impl UltraLogApp {
         // Show save dialog
         let Some(path) = rfd::FileDialog::new()
             .add_filter("PDF Document", &["pdf"])
-            .set_file_name("ultralog_scatter_plot.pdf")
+            .set_file_name("snowlv_scatter_plot.pdf")
             .save_file()
         else {
             return;
@@ -492,7 +507,7 @@ impl UltraLogApp {
         // Show save dialog
         let Some(path) = rfd::FileDialog::new()
             .add_filter("PDF Document", &["pdf"])
-            .set_file_name("ultralog_histogram.pdf")
+            .set_file_name("snowlv_histogram.pdf")
             .save_file()
         else {
             return;
@@ -638,7 +653,7 @@ impl UltraLogApp {
         // Draw title
         push_text(
             &mut ops,
-            "UltraLog Histogram Export",
+            "SnowLV Histogram Export",
             16.0,
             Mm(margin as f32),
             Mm(200.0),
@@ -888,7 +903,7 @@ impl UltraLogApp {
 
         // Build page and save PDF
         let page = PdfPage::new(Mm(297.0), Mm(210.0), ops);
-        let mut doc = PdfDocument::new("UltraLog Histogram Export");
+        let mut doc = PdfDocument::new("SnowLV Histogram Export");
         doc.with_pages(vec![page]);
         let mut warnings = Vec::new();
         let pdf_bytes = doc.save(&PdfSaveOptions::default(), &mut warnings);
@@ -1347,7 +1362,7 @@ impl UltraLogApp {
         // Draw title
         push_text(
             &mut ops,
-            "UltraLog Scatter Plot Export",
+            "SnowLV Scatter Plot Export",
             16.0,
             Mm(20.0),
             Mm(200.0),
@@ -1406,7 +1421,7 @@ impl UltraLogApp {
 
         // Build page and save PDF
         let page = PdfPage::new(Mm(297.0), Mm(210.0), ops);
-        let mut doc = PdfDocument::new("UltraLog Scatter Plot Export");
+        let mut doc = PdfDocument::new("SnowLV Scatter Plot Export");
         doc.with_pages(vec![page]);
         let mut warnings = Vec::new();
         let pdf_bytes = doc.save(&PdfSaveOptions::default(), &mut warnings);

@@ -14,7 +14,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
-  APP_NAME: UltraLog
+  APP_NAME: SnowLV
 
 jobs:
   # Determine if this is a stable or prerelease build
@@ -35,16 +35,16 @@ jobs:
           if [[ "$TAG" =~ -(beta|alpha|rc) ]]; then
             echo "is_prerelease=true" >> $GITHUB_OUTPUT
             echo "suffix=-beta" >> $GITHUB_OUTPUT
-            echo "display_name=UltraLog (Beta)" >> $GITHUB_OUTPUT
-            echo "bundle_id=com.ultralog.app.beta" >> $GITHUB_OUTPUT
-            echo "dmg_volname=UltraLog Beta" >> $GITHUB_OUTPUT
+            echo "display_name=SnowLV (Beta)" >> $GITHUB_OUTPUT
+            echo "bundle_id=com.snowlv.app.beta" >> $GITHUB_OUTPUT
+            echo "dmg_volname=SnowLV Beta" >> $GITHUB_OUTPUT
             echo "Tag $TAG is a prerelease"
           else
             echo "is_prerelease=false" >> $GITHUB_OUTPUT
             echo "suffix=" >> $GITHUB_OUTPUT
-            echo "display_name=UltraLog" >> $GITHUB_OUTPUT
-            echo "bundle_id=com.ultralog.app" >> $GITHUB_OUTPUT
-            echo "dmg_volname=UltraLog" >> $GITHUB_OUTPUT
+            echo "display_name=SnowLV" >> $GITHUB_OUTPUT
+            echo "bundle_id=com.snowlv.app" >> $GITHUB_OUTPUT
+            echo "dmg_volname=SnowLV" >> $GITHUB_OUTPUT
             echo "Tag $TAG is a stable release"
           fi
 
@@ -89,16 +89,16 @@ jobs:
       - name: Package Linux binary
         run: |
           mkdir -p output
-          cp target/x86_64-unknown-linux-gnu/release/ultralog output/ultralog-linux
-          chmod +x output/ultralog-linux
+          cp target/x86_64-unknown-linux-gnu/release/snowlv output/snowlv-linux
+          chmod +x output/snowlv-linux
           cd output
-          tar -czvf ultralog-linux${{ needs.check-tag.outputs.suffix }}.tar.gz ultralog-linux
-          rm ultralog-linux
+          tar -czvf snowlv-linux${{ needs.check-tag.outputs.suffix }}.tar.gz snowlv-linux
+          rm snowlv-linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ultralog-linux${{ needs.check-tag.outputs.suffix }}
+          name: snowlv-linux${{ needs.check-tag.outputs.suffix }}
           path: output/
 
   build-windows:
@@ -121,14 +121,14 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path output
-          Copy-Item "target/x86_64-pc-windows-msvc/release/ultralog.exe" -Destination "output/ultralog-windows${{ needs.check-tag.outputs.suffix }}.exe"
-          Compress-Archive -Path "output/ultralog-windows${{ needs.check-tag.outputs.suffix }}.exe" -DestinationPath "output/ultralog-windows${{ needs.check-tag.outputs.suffix }}.zip"
-          Remove-Item "output/ultralog-windows${{ needs.check-tag.outputs.suffix }}.exe"
+          Copy-Item "target/x86_64-pc-windows-msvc/release/snowlv.exe" -Destination "output/snowlv-windows${{ needs.check-tag.outputs.suffix }}.exe"
+          Compress-Archive -Path "output/snowlv-windows${{ needs.check-tag.outputs.suffix }}.exe" -DestinationPath "output/snowlv-windows${{ needs.check-tag.outputs.suffix }}.zip"
+          Remove-Item "output/snowlv-windows${{ needs.check-tag.outputs.suffix }}.exe"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ultralog-windows${{ needs.check-tag.outputs.suffix }}
+          name: snowlv-windows${{ needs.check-tag.outputs.suffix }}
           path: output/
 
   build-macos:
@@ -171,17 +171,17 @@ jobs:
           DMG_VOLNAME: ${{ needs.check-tag.outputs.dmg_volname }}
           SUFFIX: ${{ needs.check-tag.outputs.suffix }}
         run: |
-          ASSET_NAME="ultralog-macos-${{ matrix.arch }}${SUFFIX}"
+          ASSET_NAME="snowlv-macos-${{ matrix.arch }}${SUFFIX}"
           mkdir -p output
 
-          # Create app bundle structure (named just "UltraLog.app")
+          # Create app bundle structure (named just "SnowLV.app")
           APP_DIR="output/${{ env.APP_NAME }}.app"
           mkdir -p "$APP_DIR/Contents/MacOS"
           mkdir -p "$APP_DIR/Contents/Resources"
 
           # Copy binary
-          cp target/${{ matrix.target }}/release/ultralog "$APP_DIR/Contents/MacOS/ultralog"
-          chmod +x "$APP_DIR/Contents/MacOS/ultralog"
+          cp target/${{ matrix.target }}/release/snowlv "$APP_DIR/Contents/MacOS/snowlv"
+          chmod +x "$APP_DIR/Contents/MacOS/snowlv"
 
           # Create Info.plist
           cat > "$APP_DIR/Contents/Info.plist" << EOF
@@ -202,7 +202,7 @@ jobs:
               <key>CFBundlePackageType</key>
               <string>APPL</string>
               <key>CFBundleExecutable</key>
-              <string>ultralog</string>
+              <string>snowlv</string>
               <key>CFBundleIconFile</key>
               <string>AppIcon</string>
               <key>LSMinimumSystemVersion</key>
@@ -287,7 +287,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ultralog-macos-${{ matrix.arch }}${{ needs.check-tag.outputs.suffix }}
+          name: snowlv-macos-${{ matrix.arch }}${{ needs.check-tag.outputs.suffix }}
           path: output/*.dmg
 
   release:
@@ -321,10 +321,10 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/ultralog-macos-intel/*.dmg
-            artifacts/ultralog-macos-arm64/*.dmg
-            artifacts/ultralog-windows/*.zip
-            artifacts/ultralog-linux/*.tar.gz
+            artifacts/snowlv-macos-intel/*.dmg
+            artifacts/snowlv-macos-arm64/*.dmg
+            artifacts/snowlv-windows/*.zip
+            artifacts/snowlv-linux/*.tar.gz
           draft: false
           prerelease: false
           generate_release_notes: true
@@ -337,10 +337,10 @@ jobs:
         uses: softprops/action-gh-release@v1
         with:
           files: |
-            artifacts/ultralog-macos-intel-beta/*.dmg
-            artifacts/ultralog-macos-arm64-beta/*.dmg
-            artifacts/ultralog-windows-beta/*.zip
-            artifacts/ultralog-linux-beta/*.tar.gz
+            artifacts/snowlv-macos-intel-beta/*.dmg
+            artifacts/snowlv-macos-arm64-beta/*.dmg
+            artifacts/snowlv-windows-beta/*.zip
+            artifacts/snowlv-linux-beta/*.tar.gz
           draft: false
           prerelease: true
           name: "${{ steps.tag.outputs.TAG }} (Beta)"
@@ -359,20 +359,20 @@ jobs:
 
             ### macOS
             1. Download the appropriate `.dmg` file for your Mac:
-               - **Intel Mac**: `ultralog-macos-intel-beta.dmg`
-               - **Apple Silicon (M1/M2/M3/M4)**: `ultralog-macos-arm64-beta.dmg`
-            2. Open the DMG and drag UltraLog to your Applications folder
+               - **Intel Mac**: `snowlv-macos-intel-beta.dmg`
+               - **Apple Silicon (M1/M2/M3/M4)**: `snowlv-macos-arm64-beta.dmg`
+            2. Open the DMG and drag SnowLV to your Applications folder
             3. On first run, right-click the app and select "Open" to bypass Gatekeeper
 
             ### Windows
-            1. Download `ultralog-windows-beta.zip`
+            1. Download `snowlv-windows-beta.zip`
             2. Extract the zip file
-            3. Run `ultralog-windows-beta.exe`
+            3. Run `snowlv-windows-beta.exe`
 
             ### Linux
-            1. Download `ultralog-linux-beta.tar.gz`
-            2. Extract: `tar -xzf ultralog-linux-beta.tar.gz`
-            3. Run: `./ultralog-linux`
+            1. Download `snowlv-linux-beta.tar.gz`
+            2. Extract: `tar -xzf snowlv-linux-beta.tar.gz`
+            3. Run: `./snowlv-linux`
 
             ---
 

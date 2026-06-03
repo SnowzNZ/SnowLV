@@ -6,13 +6,13 @@
 use eframe::egui;
 use rust_i18n::t;
 
-use crate::app::UltraLogApp;
+use crate::app::SnowLVApp;
 use crate::computed::ComputedChannelTemplate;
 use crate::expression::{
     build_channel_bindings, extract_channel_references, generate_preview, validate_formula,
 };
 
-impl UltraLogApp {
+impl SnowLVApp {
     /// Render the formula editor dialog
     pub fn render_formula_editor(&mut self, ctx: &egui::Context) {
         if !self.formula_editor_state.is_open {

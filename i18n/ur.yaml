@@ -1,5 +1,5 @@
-# English translations for UltraLog
-# اردو ترجمہ برائے UltraLog
+# English translations for SnowLV
+# اردو ترجمہ برائے SnowLV
 
 # Menu bar (src/ui/menu.rs)
 menu:
@@ -61,8 +61,6 @@ settings:
   cursor_tracking: "کرسر ٹریکنگ"
   cursor_tracking_desc: "سکربنگ کے دوران کرسر کو مرکز میں رکھیں"
   window: "ونڈو:"
-  scroll_to_zoom: "سکرول کریں تاکہ تقریب ہو"
-  scroll_to_zoom_desc: "ماؤس وہیل براہ راست چارٹ کو بڑھاتا ہے بجائے پیننگ کے"
   show_grid: "گرڈ دکھائیں"
   show_grid_desc: "چار्ट کی پس منظر کی شبکہ کھینچیں"
   grid_opacity: "شفافیت:"
@@ -143,7 +141,7 @@ update:
   download_complete: "ڈاؤن لوڈ مکمل!"
   install_instructions: "اپڈیٹ لاگو کرنے کے لیے انسٹال پر کلک کریں۔"
   windows_restart: "ایپلیکیشن بند ہو کر خودکار طور پر دوبارہ شروع ہوگی۔"
-  macos_dmg: "DMG کھلے گا - UltraLog کو Applications میں ڈریگ کریں۔"
+  macos_dmg: "DMG کھلے گا - SnowLV کو Applications میں ڈریگ کریں۔"
   linux_restart: "ایپلیکیشن بند ہو کر خودکار طور پر دوبارہ شروع ہوگی۔"
   install_now: "ابھی انسٹال کریں"
   install_later: "بعد میں انسٹال کریں"

@@ -92,7 +92,7 @@ impl Default for CacheMetadata {
 /// Get the cache directory path
 /// Returns None if the app data directory cannot be determined
 pub fn get_cache_dir() -> Option<PathBuf> {
-    dirs::data_dir().map(|base| base.join("UltraLog").join(CACHE_DIR_NAME))
+    dirs::data_dir().map(|base| base.join("SnowLV").join(CACHE_DIR_NAME))
 }
 
 /// Ensure the cache directory structure exists
@@ -334,8 +334,8 @@ mod tests {
 
         let path = cache_dir.unwrap();
         assert!(
-            path.to_string_lossy().contains("UltraLog"),
-            "Cache path should contain UltraLog"
+            path.to_string_lossy().contains("SnowLV"),
+            "Cache path should contain SnowLV"
         );
         assert!(
             path.to_string_lossy().contains("oecua_specs"),

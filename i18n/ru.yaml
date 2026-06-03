@@ -1,4 +1,4 @@
-# Russian translations for UltraLog
+# Russian translations for SnowLV
 
 # Menu bar (src/ui/menu.rs)
 menu:
@@ -60,8 +60,6 @@ settings:
   cursor_tracking: "Отслеживание курсора"
   cursor_tracking_desc: "Удерживать курсор в центре при прокрутке"
   window: "Окно:"
-  scroll_to_zoom: "Прокрутка для увеличения"
-  scroll_to_zoom_desc: "Колесико мыши увеличивает график напрямую вместо панорамирования"
   show_grid: "Показывать сетку"
   show_grid_desc: "Отображать координатную сетку на графике"
   grid_opacity: "Прозрачность:"
@@ -142,7 +140,7 @@ update:
   download_complete: "Загрузка завершена!"
   install_instructions: "Нажмите «Установить», чтобы применить обновление."
   windows_restart: "Приложение закроется и перезапустится автоматически."
-  macos_dmg: "Откроется DMG — перетащите UltraLog в папку «Программы»."
+  macos_dmg: "Откроется DMG — перетащите SnowLV в папку «Программы»."
   linux_restart: "Приложение закроется и перезапустится автоматически."
   install_now: "Установить сейчас"
   install_later: "Установить позже"
