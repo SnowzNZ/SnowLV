@@ -76,23 +76,55 @@ fn calculate_data_bin(value: f64, min: f64, range: f64, grid_size: usize) -> usi
     calculate_bin(normalized.clamp(0.0, 1.0), grid_size)
 }
 
-/// Calculate the bin index for a custom breakpoint list
-fn calculate_data_bin_for_breakpoints(value: f64, breakpoints: &[f64]) -> usize {
-    if breakpoints.len() < 2 {
-        return 0;
+/// Build bin boundaries from axis cell centers.
+///
+/// Internal boundaries are midpoints between adjacent centers. Endpoint
+/// boundaries are extrapolated by the adjacent half-step so custom axis labels
+/// represent the exact cell center shown on screen.
+fn axis_center_boundaries(centers: &[f64]) -> Vec<f64> {
+    match centers.len() {
+        0 => Vec::new(),
+        1 => vec![centers[0] - 0.5, centers[0] + 0.5],
+        len => {
+            let mut boundaries = Vec::with_capacity(len + 1);
+            let first_half_step = (centers[1] - centers[0]) / 2.0;
+            boundaries.push(centers[0] - first_half_step);
+
+            for i in 1..len {
+                boundaries.push((centers[i - 1] + centers[i]) / 2.0);
+            }
+
+            let last_half_step = (centers[len - 1] - centers[len - 2]) / 2.0;
+            boundaries.push(centers[len - 1] + last_half_step);
+            boundaries
+        }
     }
-    let bin_count = breakpoints.len() - 1;
-    let idx = breakpoints
+}
+
+/// Calculate the bin index for a custom axis center list.
+fn calculate_data_bin_for_centers(value: f64, centers: &[f64]) -> Option<usize> {
+    if centers.is_empty() {
+        return None;
+    }
+
+    let boundaries = axis_center_boundaries(centers);
+    let lower = *boundaries.first()?;
+    let upper = *boundaries.last()?;
+    if value < lower || value > upper {
+        return None;
+    }
+
+    let idx = boundaries
         .iter()
         .position(|&boundary| value < boundary)
-        .unwrap_or(breakpoints.len());
+        .unwrap_or(boundaries.len());
 
     if idx == 0 {
-        0
-    } else if idx >= breakpoints.len() {
-        bin_count - 1
+        Some(0)
+    } else if idx >= boundaries.len() {
+        Some(centers.len() - 1)
     } else {
-        idx - 1
+        Some(idx - 1)
     }
 }
 
@@ -118,17 +150,20 @@ fn format_histogram_value(value: f64, precision: usize) -> String {
     format!("{:.*}", precision, value)
 }
 
-/// Parse a comma-separated list of numeric bin breakpoints.
-/// Empty or invalid input returns None, otherwise returns sorted unique breakpoints.
-fn build_equal_breakpoints(bin_count: usize, min: f64, max: f64) -> Vec<f64> {
+/// Build evenly-spaced cell centers for an axis range.
+fn build_equal_centers(bin_count: usize, min: f64, max: f64) -> Vec<f64> {
     if bin_count == 0 {
-        return vec![min, max];
+        return Vec::new();
     }
     let step = (max - min) / bin_count as f64;
-    (0..=bin_count).map(|i| min + i as f64 * step).collect()
+    (0..bin_count)
+        .map(|i| min + (i as f64 + 0.5) * step)
+        .collect()
 }
 
-fn normalize_breakpoints(mut values: Vec<f64>) -> Option<Vec<f64>> {
+fn normalize_axis_centers(mut values: Vec<f64>) -> Option<Vec<f64>> {
+    values.retain(|value| value.is_finite());
+    values.sort_by(|a, b| a.total_cmp(b));
     values.dedup();
     if values.len() >= 2 {
         Some(values)
@@ -137,7 +172,7 @@ fn normalize_breakpoints(mut values: Vec<f64>) -> Option<Vec<f64>> {
     }
 }
 
-fn breakpoints_to_text(values: &[f64], precision: usize) -> String {
+fn axis_centers_to_text(values: &[f64], precision: usize) -> String {
     values
         .iter()
         .map(|value| format_histogram_value(*value, precision))
@@ -146,19 +181,16 @@ fn breakpoints_to_text(values: &[f64], precision: usize) -> String {
 }
 
 fn label_values_for_axis(
-    breakpoints: Option<&Vec<f64>>,
+    centers: Option<&Vec<f64>>,
     grid_size: usize,
     min: f64,
     max: f64,
     sort_order: SortOrder,
 ) -> Vec<f64> {
-    let mut values: Vec<f64> = if let Some(breakpoints) = breakpoints {
-        breakpoints.iter().take(grid_size).cloned().collect()
+    let mut values: Vec<f64> = if let Some(centers) = centers {
+        centers.iter().take(grid_size).cloned().collect()
     } else {
-        build_equal_breakpoints(grid_size, min, max)
-            .into_iter()
-            .take(grid_size)
-            .collect()
+        build_equal_centers(grid_size, min, max)
     };
 
     if let SortOrder::Decreasing = sort_order {
@@ -172,7 +204,7 @@ fn label_values_for_axis(
 fn axis_bin_value_range(
     display_index: usize,
     grid_size: usize,
-    breakpoints: Option<&Vec<f64>>,
+    centers: Option<&Vec<f64>>,
     min: f64,
     max: f64,
     sort_order: SortOrder,
@@ -186,10 +218,11 @@ fn axis_bin_value_range(
         SortOrder::Decreasing => grid_size.saturating_sub(1 + display_index),
     };
 
-    if let Some(breakpoints) = breakpoints {
-        if breakpoints.len() > grid_size && raw_index < grid_size {
-            let start = breakpoints[raw_index];
-            let end = breakpoints[raw_index + 1];
+    if let Some(centers) = centers {
+        if centers.len() >= grid_size && raw_index < grid_size {
+            let boundaries = axis_center_boundaries(centers);
+            let start = boundaries[raw_index];
+            let end = boundaries[raw_index + 1];
             return if start <= end {
                 (start, end)
             } else {
@@ -211,7 +244,7 @@ fn axis_bin_value_range(
 /// Map a normalized position inside a histogram axis to the displayed axis value.
 fn axis_value_from_position(
     normalized: f32,
-    breakpoints: Option<&Vec<f64>>,
+    centers: Option<&Vec<f64>>,
     grid_size: usize,
     min: f64,
     max: f64,
@@ -224,8 +257,7 @@ fn axis_value_from_position(
     let normalized = normalized.clamp(0.0, 1.0);
     let raw_index = calculate_bin(normalized, grid_size);
     let bin_fraction = (normalized * grid_size as f32) - raw_index as f32;
-    let (lower, upper) =
-        axis_bin_value_range(raw_index, grid_size, breakpoints, min, max, sort_order);
+    let (lower, upper) = axis_bin_value_range(raw_index, grid_size, centers, min, max, sort_order);
 
     let left_edge = if sort_order == SortOrder::Increasing {
         lower
@@ -239,6 +271,52 @@ fn axis_value_from_position(
     };
 
     left_edge + bin_fraction as f64 * (right_edge - left_edge)
+}
+
+/// Map an axis value into a displayed bin index and normalized plot position.
+fn axis_bin_and_position_from_value(
+    value: f64,
+    centers: Option<&Vec<f64>>,
+    grid_size: usize,
+    min: f64,
+    max: f64,
+    sort_order: SortOrder,
+) -> Option<(usize, f32)> {
+    if grid_size == 0 {
+        return None;
+    }
+
+    let range = max - min;
+    let raw_index = if let Some(centers) = centers {
+        calculate_data_bin_for_centers(value, centers)?
+    } else {
+        if value < min || value > max {
+            return None;
+        }
+        calculate_data_bin(value, min, range.max(f64::EPSILON), grid_size)
+    };
+    let display_index = apply_sort_order(raw_index, grid_size, sort_order);
+    let (lower, upper) =
+        axis_bin_value_range(display_index, grid_size, centers, min, max, sort_order);
+
+    let start_edge = if sort_order == SortOrder::Increasing {
+        lower
+    } else {
+        upper
+    };
+    let end_edge = if sort_order == SortOrder::Increasing {
+        upper
+    } else {
+        lower
+    };
+    let bin_fraction = if (end_edge - start_edge).abs() < f64::EPSILON {
+        0.5
+    } else {
+        ((value - start_edge) / (end_edge - start_edge)).clamp(0.0, 1.0)
+    };
+    let normalized = ((display_index as f64 + bin_fraction) / grid_size as f64) as f32;
+
+    Some((display_index, normalized.clamp(0.0, 1.0)))
 }
 
 /// Parse a pasted axis label edit string into numeric values.
@@ -269,45 +347,34 @@ fn apply_axis_label_values(
         return None;
     }
 
-    let required_len = axis_len + 1;
-    let mut breakpoints = if let Some(ref bins) = current {
+    let required_len = axis_len;
+    let mut centers = if let Some(ref bins) = current {
         let mut bins = bins.clone();
         if bins.len() < required_len {
-            let defaults = build_equal_breakpoints(axis_len, min, max);
+            let defaults = build_equal_centers(axis_len, min, max);
             bins.extend(defaults.into_iter().skip(bins.len()));
         } else if bins.len() > required_len {
             bins.truncate(required_len);
         }
         bins
     } else {
-        build_equal_breakpoints(axis_len, min, max)
+        build_equal_centers(axis_len, min, max)
     };
 
-    if breakpoints.len() < required_len {
-        breakpoints = build_equal_breakpoints(axis_len, min, max);
+    if centers.len() < required_len {
+        centers = build_equal_centers(axis_len, min, max);
     }
 
     for (offset, &value) in values.iter().enumerate() {
         let idx = start_index + offset;
-        if idx < breakpoints.len() {
-            breakpoints[idx] = value;
+        if idx < centers.len() {
+            centers[idx] = value;
         } else {
             break;
         }
     }
 
-    if start_index == 0 && values.len() == axis_len && breakpoints.len() == required_len {
-        let inferred_boundary = if values.len() >= 2 {
-            let last = values[values.len() - 1];
-            let prev = values[values.len() - 2];
-            last + (last - prev)
-        } else {
-            max + (max - min) / axis_len as f64
-        };
-        breakpoints[required_len - 1] = inferred_boundary;
-    }
-
-    normalize_breakpoints(breakpoints)
+    normalize_axis_centers(centers)
 }
 
 /// Calculate relative luminance for WCAG contrast ratio
@@ -670,7 +737,7 @@ impl SnowLVApp {
         // Grid columns
         ui.label(egui::RichText::new("Columns (X bins)").size(font_14));
         let effective_cols = if let Some(ref bins) = current_custom_x_bins {
-            bins.len().saturating_sub(1).clamp(4, 256)
+            bins.len().clamp(4, 256)
         } else if current_custom_grid_cols > 0 {
             current_custom_grid_cols
         } else {
@@ -691,7 +758,7 @@ impl SnowLVApp {
         // Grid rows
         ui.label(egui::RichText::new("Rows (Y bins)").size(font_14));
         let effective_rows = if let Some(ref bins) = current_custom_y_bins {
-            bins.len().saturating_sub(1).clamp(4, 256)
+            bins.len().clamp(4, 256)
         } else if current_custom_grid_rows > 0 {
             current_custom_grid_rows
         } else {
@@ -1437,8 +1504,8 @@ impl SnowLVApp {
             y_max - y_min
         };
 
-        let x_breakpoints = config.custom_x_bins.clone();
-        let y_breakpoints = config.custom_y_bins.clone();
+        let x_centers = config.custom_x_bins.clone();
+        let y_centers = config.custom_y_bins.clone();
 
         // Pre-fetch filter channel data for efficiency
         let filter_data: Vec<(&SampleFilter, Vec<f64>)> = sample_filters
@@ -1482,13 +1549,19 @@ impl SnowLVApp {
                 continue;
             }
 
-            let raw_x_bin = if let Some(ref breakpoints) = x_breakpoints {
-                calculate_data_bin_for_breakpoints(x_data[i], breakpoints)
+            let raw_x_bin = if let Some(ref centers) = x_centers {
+                match calculate_data_bin_for_centers(x_data[i], centers) {
+                    Some(bin) => bin,
+                    None => continue,
+                }
             } else {
                 calculate_data_bin(x_data[i], x_min, x_range, grid_cols)
             };
-            let raw_y_bin = if let Some(ref breakpoints) = y_breakpoints {
-                calculate_data_bin_for_breakpoints(y_data[i], breakpoints)
+            let raw_y_bin = if let Some(ref centers) = y_centers {
+                match calculate_data_bin_for_centers(y_data[i], centers) {
+                    Some(bin) => bin,
+                    None => continue,
+                }
             } else {
                 calculate_data_bin(y_data[i], y_min, y_range, grid_rows)
             };
@@ -1827,14 +1900,14 @@ impl SnowLVApp {
         let axis_title_color = egui::Color32::from_rgb(255, 255, 255);
 
         let x_label_values = label_values_for_axis(
-            x_breakpoints.as_ref(),
+            x_centers.as_ref(),
             grid_cols,
             x_min,
             x_max,
             config.x_sort_order,
         );
         let y_label_values = label_values_for_axis(
-            y_breakpoints.as_ref(),
+            y_centers.as_ref(),
             grid_rows,
             y_min,
             y_max,
@@ -1877,17 +1950,21 @@ impl SnowLVApp {
                 if edit_response.lost_focus() && !edit_response.has_focus()
                     || (enter_pressed && edit_response.has_focus())
                 {
+                    let raw_label_index = match config.y_sort_order {
+                        SortOrder::Increasing => i,
+                        SortOrder::Decreasing => grid_rows.saturating_sub(1 + i),
+                    };
                     if let Some(new_bins) = apply_axis_label_values(
                         &config.custom_y_bins,
                         &config.y_axis_label_edit_text,
-                        i,
+                        raw_label_index,
                         grid_rows,
                         y_min,
                         y_max,
                     ) {
                         config.custom_y_bins = Some(new_bins.clone());
                         config.custom_y_bins_text =
-                            breakpoints_to_text(&new_bins, config.decimal_precision);
+                            axis_centers_to_text(&new_bins, config.decimal_precision);
                     }
                     config.editing_y_axis_label = None;
                 }
@@ -2007,17 +2084,21 @@ impl SnowLVApp {
                 if edit_response.lost_focus() && !edit_response.has_focus()
                     || (enter_pressed && edit_response.has_focus())
                 {
+                    let raw_label_index = match config.x_sort_order {
+                        SortOrder::Increasing => i,
+                        SortOrder::Decreasing => grid_cols.saturating_sub(1 + i),
+                    };
                     if let Some(new_bins) = apply_axis_label_values(
                         &config.custom_x_bins,
                         &config.x_axis_label_edit_text,
-                        i,
+                        raw_label_index,
                         grid_cols,
                         x_min,
                         x_max,
                     ) {
                         config.custom_x_bins = Some(new_bins.clone());
                         config.custom_x_bins_text =
-                            breakpoints_to_text(&new_bins, config.decimal_precision);
+                            axis_centers_to_text(&new_bins, config.decimal_precision);
                     }
                     config.editing_x_axis_label = None;
                 }
@@ -2082,10 +2163,24 @@ impl SnowLVApp {
                 let cursor_x = x_data[cursor_record];
                 let cursor_y = y_data[cursor_record];
 
-                let rel_x = ((cursor_x - x_min) / x_range) as f32;
-                let rel_y = ((cursor_y - y_min) / y_range) as f32;
-
-                if (0.0..=1.0).contains(&rel_x) && (0.0..=1.0).contains(&rel_y) {
+                if let (Some((cell_x_bin, rel_x)), Some((cell_y_bin, rel_y))) = (
+                    axis_bin_and_position_from_value(
+                        cursor_x,
+                        x_centers.as_ref(),
+                        grid_cols,
+                        x_min,
+                        x_max,
+                        config.x_sort_order,
+                    ),
+                    axis_bin_and_position_from_value(
+                        cursor_y,
+                        y_centers.as_ref(),
+                        grid_rows,
+                        y_min,
+                        y_max,
+                        config.y_sort_order,
+                    ),
+                ) {
                     let pos_x = plot_rect.left() + rel_x * plot_rect.width();
                     let pos_y = plot_rect.bottom() - rel_y * plot_rect.height();
 
@@ -2104,10 +2199,6 @@ impl SnowLVApp {
                         ],
                         egui::Stroke::new(1.0, CURSOR_CROSSHAIR_COLOR),
                     );
-
-                    // Highlight the cell containing the cursor
-                    let cell_x_bin = calculate_bin(rel_x, grid_cols);
-                    let cell_y_bin = calculate_bin(rel_y, grid_rows);
 
                     let highlight_x = plot_rect.left() + cell_x_bin as f32 * cell_width;
                     let highlight_y = plot_rect.bottom() - (cell_y_bin + 1) as f32 * cell_height;
@@ -2154,7 +2245,7 @@ impl SnowLVApp {
                 if (0.0..=1.0).contains(&rel_x) && (0.0..=1.0).contains(&rel_y) {
                     let x_val = axis_value_from_position(
                         rel_x,
-                        x_breakpoints.as_ref(),
+                        x_centers.as_ref(),
                         grid_cols,
                         x_min,
                         x_max,
@@ -2162,7 +2253,7 @@ impl SnowLVApp {
                     );
                     let y_val = axis_value_from_position(
                         rel_y,
-                        y_breakpoints.as_ref(),
+                        y_centers.as_ref(),
                         grid_rows,
                         y_min,
                         y_max,
@@ -2254,7 +2345,7 @@ impl SnowLVApp {
                         let (cell_x_min, cell_x_max) = axis_bin_value_range(
                             x_bin,
                             grid_cols,
-                            x_breakpoints.as_ref(),
+                            x_centers.as_ref(),
                             x_min,
                             x_max,
                             config.x_sort_order,
@@ -2262,7 +2353,7 @@ impl SnowLVApp {
                         let (cell_y_min, cell_y_max) = axis_bin_value_range(
                             y_bin,
                             grid_rows,
-                            y_breakpoints.as_ref(),
+                            y_centers.as_ref(),
                             y_min,
                             y_max,
                             config.y_sort_order,
@@ -2979,14 +3070,32 @@ impl SnowLVApp {
         } else {
             y_max - y_min
         };
+        let x_centers = config.custom_x_bins.as_ref();
+        let y_centers = config.custom_y_bins.as_ref();
 
         // Build histogram grid
         let mut hit_counts = vec![vec![0u32; grid_cols]; grid_rows];
         let mut z_sums = vec![vec![0.0f64; grid_cols]; grid_rows];
 
         for i in 0..x_data.len() {
-            let x_bin = calculate_data_bin(x_data[i], x_min, x_range, grid_cols);
-            let y_bin = calculate_data_bin(y_data[i], y_min, y_range, grid_rows);
+            let raw_x_bin = if let Some(centers) = x_centers {
+                match calculate_data_bin_for_centers(x_data[i], centers) {
+                    Some(bin) => bin,
+                    None => continue,
+                }
+            } else {
+                calculate_data_bin(x_data[i], x_min, x_range, grid_cols)
+            };
+            let raw_y_bin = if let Some(centers) = y_centers {
+                match calculate_data_bin_for_centers(y_data[i], centers) {
+                    Some(bin) => bin,
+                    None => continue,
+                }
+            } else {
+                calculate_data_bin(y_data[i], y_min, y_range, grid_rows)
+            };
+            let x_bin = apply_sort_order(raw_x_bin, grid_cols, config.x_sort_order);
+            let y_bin = apply_sort_order(raw_y_bin, grid_rows, config.y_sort_order);
             hit_counts[y_bin][x_bin] += 1;
             if let Some(ref z) = z_data {
                 z_sums[y_bin][x_bin] += z[i];
@@ -2996,10 +3105,15 @@ impl SnowLVApp {
         // Generate TSV string
         let mut tsv = String::new();
 
-        // Header row: X breakpoints
+        let x_label_values =
+            label_values_for_axis(x_centers, grid_cols, x_min, x_max, config.x_sort_order);
+        let y_label_values =
+            label_values_for_axis(y_centers, grid_rows, y_min, y_max, config.y_sort_order);
+
+        // Header row: X axis centers
         tsv.push('\t'); // Empty cell for Y label column
         for x_bin in 0..grid_cols {
-            let x_val = x_min + (x_bin as f64 + 0.5) * (x_range / grid_cols as f64);
+            let x_val = x_label_values.get(x_bin).copied().unwrap_or(0.0);
             tsv.push_str(&format_histogram_value(x_val, config.decimal_precision));
             if x_bin < grid_cols - 1 {
                 tsv.push('\t');
@@ -3010,7 +3124,7 @@ impl SnowLVApp {
         // Data rows (from top to bottom, so reverse Y order)
         for y_bin in (0..grid_rows).rev() {
             // Y label
-            let y_val = y_min + (y_bin as f64 + 0.5) * (y_range / grid_rows as f64);
+            let y_val = y_label_values.get(y_bin).copied().unwrap_or(0.0);
             tsv.push_str(&format!(
                 "{}\t",
                 format_histogram_value(y_val, config.decimal_precision)
@@ -3108,14 +3222,32 @@ impl SnowLVApp {
         } else {
             y_max - y_min
         };
+        let x_centers = config.custom_x_bins.as_ref();
+        let y_centers = config.custom_y_bins.as_ref();
 
         // Build histogram grid
         let mut hit_counts = vec![vec![0u32; grid_cols]; grid_rows];
         let mut z_sums = vec![vec![0.0f64; grid_cols]; grid_rows];
 
         for i in 0..x_data.len() {
-            let x_bin = calculate_data_bin(x_data[i], x_min, x_range, grid_cols);
-            let y_bin = calculate_data_bin(y_data[i], y_min, y_range, grid_rows);
+            let raw_x_bin = if let Some(centers) = x_centers {
+                match calculate_data_bin_for_centers(x_data[i], centers) {
+                    Some(bin) => bin,
+                    None => continue,
+                }
+            } else {
+                calculate_data_bin(x_data[i], x_min, x_range, grid_cols)
+            };
+            let raw_y_bin = if let Some(centers) = y_centers {
+                match calculate_data_bin_for_centers(y_data[i], centers) {
+                    Some(bin) => bin,
+                    None => continue,
+                }
+            } else {
+                calculate_data_bin(y_data[i], y_min, y_range, grid_rows)
+            };
+            let x_bin = apply_sort_order(raw_x_bin, grid_cols, config.x_sort_order);
+            let y_bin = apply_sort_order(raw_y_bin, grid_rows, config.y_sort_order);
             hit_counts[y_bin][x_bin] += 1;
             if let Some(ref z) = z_data {
                 z_sums[y_bin][x_bin] += z[i];
@@ -3145,10 +3277,14 @@ impl SnowLVApp {
         let resampled = Self::resample_table(pasted_table, grid_cols, grid_rows);
         let result_values = Self::apply_table_operation(&hist_values, &resampled, table_operation);
 
-        // Generate TSV string with pasted table's breakpoints
+        // Generate TSV string with axis centers
         let mut tsv = String::new();
+        let x_label_values =
+            label_values_for_axis(x_centers, grid_cols, x_min, x_max, config.x_sort_order);
+        let y_label_values =
+            label_values_for_axis(y_centers, grid_rows, y_min, y_max, config.y_sort_order);
 
-        // Header row: X breakpoints (use pasted table's breakpoints if they match grid size)
+        // Header row: X centers (use pasted table centers if they match grid size)
         tsv.push('\t'); // Empty cell for Y label column
         for x_bin in 0..grid_cols {
             let x_val = if !pasted_table.x_breakpoints.is_empty()
@@ -3156,7 +3292,7 @@ impl SnowLVApp {
             {
                 pasted_table.x_breakpoints[x_bin]
             } else {
-                x_min + (x_bin as f64 + 0.5) * (x_range / grid_cols as f64)
+                x_label_values.get(x_bin).copied().unwrap_or(0.0)
             };
             tsv.push_str(&format_histogram_value(x_val, config.decimal_precision));
             if x_bin < grid_cols - 1 {
@@ -3167,13 +3303,13 @@ impl SnowLVApp {
 
         // Data rows (from top to bottom, so reverse Y order)
         for y_bin in (0..grid_rows).rev() {
-            // Y label (use pasted table's breakpoints if they match grid size)
+            // Y label (use pasted table centers if they match grid size)
             let y_val = if !pasted_table.y_breakpoints.is_empty()
                 && pasted_table.y_breakpoints.len() == grid_rows
             {
                 pasted_table.y_breakpoints[grid_rows - 1 - y_bin]
             } else {
-                y_min + (y_bin as f64 + 0.5) * (y_range / grid_rows as f64)
+                y_label_values.get(y_bin).copied().unwrap_or(0.0)
             };
             tsv.push_str(&format!(
                 "{}\t",
@@ -3239,33 +3375,41 @@ impl SnowLVApp {
         let (grid_cols, grid_rows) = config.effective_grid_size();
 
         if let Some(label_index) = config.editing_x_axis_label {
+            let raw_label_index = match config.x_sort_order {
+                SortOrder::Increasing => label_index,
+                SortOrder::Decreasing => grid_cols.saturating_sub(1 + label_index),
+            };
             if let Some(new_bins) = apply_axis_label_values(
                 &config.custom_x_bins,
                 &config.x_axis_label_edit_text,
-                label_index,
+                raw_label_index,
                 grid_cols,
                 x_min,
                 x_max,
             ) {
                 config.custom_x_bins = Some(new_bins.clone());
                 config.custom_x_bins_text =
-                    breakpoints_to_text(&new_bins, config.decimal_precision);
+                    axis_centers_to_text(&new_bins, config.decimal_precision);
             }
             config.editing_x_axis_label = None;
         }
 
         if let Some(label_index) = config.editing_y_axis_label {
+            let raw_label_index = match config.y_sort_order {
+                SortOrder::Increasing => label_index,
+                SortOrder::Decreasing => grid_rows.saturating_sub(1 + label_index),
+            };
             if let Some(new_bins) = apply_axis_label_values(
                 &config.custom_y_bins,
                 &config.y_axis_label_edit_text,
-                label_index,
+                raw_label_index,
                 grid_rows,
                 y_min,
                 y_max,
             ) {
                 config.custom_y_bins = Some(new_bins.clone());
                 config.custom_y_bins_text =
-                    breakpoints_to_text(&new_bins, config.decimal_precision);
+                    axis_centers_to_text(&new_bins, config.decimal_precision);
             }
             config.editing_y_axis_label = None;
         }
@@ -3352,7 +3496,7 @@ impl SnowLVApp {
             cleaned.parse::<f64>().ok()
         };
 
-        // Try to parse first row as X breakpoints
+        // Try to parse first row as X centers
         let first_row: Vec<&str> = lines[0].split('\t').collect();
         let x_start = if first_row
             .first()
@@ -3363,12 +3507,12 @@ impl SnowLVApp {
         } else {
             0
         };
-        let x_breakpoints: Vec<f64> = first_row[x_start..]
+        let x_centers: Vec<f64> = first_row[x_start..]
             .iter()
             .filter_map(|s| parse_number(s))
             .collect();
 
-        let mut y_breakpoints = Vec::new();
+        let mut y_centers = Vec::new();
         let mut data = Vec::new();
 
         for line in &lines[1..] {
@@ -3377,9 +3521,9 @@ impl SnowLVApp {
                 continue;
             }
 
-            // First cell is Y breakpoint
+            // First cell is Y center
             if let Some(y_val) = parse_number(cells[0]) {
-                y_breakpoints.push(y_val);
+                y_centers.push(y_val);
             }
 
             // Remaining cells are data
@@ -3395,21 +3539,41 @@ impl SnowLVApp {
 
         let original_rows = data.len();
         let original_cols = data.first().map(|r| r.len()).unwrap_or(0);
+        let normalized_x_centers = if x_centers.len() == original_cols {
+            normalize_axis_centers(x_centers.clone())
+        } else {
+            None
+        };
+        let normalized_y_centers = if y_centers.len() == original_rows {
+            normalize_axis_centers(y_centers.clone())
+        } else {
+            None
+        };
 
         let pasted_table = PastedTable {
             data,
-            x_breakpoints,
-            y_breakpoints,
+            x_breakpoints: x_centers,
+            y_breakpoints: y_centers,
             original_rows,
             original_cols,
             is_resampled: false,
         };
 
-        self.tabs[tab_idx].histogram_state.config.pasted_table = Some(pasted_table);
-        self.tabs[tab_idx]
-            .histogram_state
-            .config
-            .show_comparison_view = true;
+        let precision = self.tabs[tab_idx].histogram_state.config.decimal_precision;
+        let config = &mut self.tabs[tab_idx].histogram_state.config;
+        if let Some(centers) = normalized_x_centers {
+            config.custom_grid_columns = centers.len();
+            config.custom_x_bins_text = axis_centers_to_text(&centers, precision);
+            config.custom_x_bins = Some(centers);
+        }
+        if let Some(centers) = normalized_y_centers {
+            config.custom_grid_rows = centers.len();
+            config.custom_y_bins_text = axis_centers_to_text(&centers, precision);
+            config.custom_y_bins = Some(centers);
+        }
+        config.selected_cell = None;
+        config.pasted_table = Some(pasted_table);
+        config.show_comparison_view = true;
     }
 }
 
@@ -3424,7 +3588,29 @@ mod tests {
     }
 
     #[test]
-    fn apply_axis_label_values_updates_sequential_breakpoints() {
+    fn axis_center_boundaries_use_midpoints_between_centers() {
+        let centers = vec![0.67, 1.00, 1.67];
+        let boundaries = axis_center_boundaries(&centers);
+        let expected = [0.505, 0.835, 1.335, 2.005];
+
+        for (actual, expected) in boundaries.iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn calculate_data_bin_for_centers_uses_midpoint_boundaries() {
+        let centers = vec![0.67, 1.00, 1.67];
+
+        assert_eq!(calculate_data_bin_for_centers(0.84, &centers), Some(1));
+        assert_eq!(calculate_data_bin_for_centers(1.33, &centers), Some(1));
+        assert_eq!(calculate_data_bin_for_centers(1.34, &centers), Some(2));
+        assert_eq!(calculate_data_bin_for_centers(0.40, &centers), None);
+        assert_eq!(calculate_data_bin_for_centers(2.10, &centers), None);
+    }
+
+    #[test]
+    fn apply_axis_label_values_updates_sequential_centers() {
         let current = None;
         let result = apply_axis_label_values(&current, "0.00,0.25,0.35", 0, 4, 0.0, 1.0);
         assert!(result.is_some());
@@ -3432,7 +3618,7 @@ mod tests {
         assert_eq!(bins[0], 0.00);
         assert_eq!(bins[1], 0.25);
         assert_eq!(bins[2], 0.35);
-        assert_eq!(bins.len(), 5);
+        assert_eq!(bins.len(), 4);
     }
 
     #[test]
@@ -3442,11 +3628,10 @@ mod tests {
         let result = apply_axis_label_values(&current, text, 0, 16, 0.0, 1.25);
         assert!(result.is_some());
         let bins = result.unwrap();
-        assert_eq!(bins.len(), 17);
+        assert_eq!(bins.len(), 16);
         assert_eq!(bins[0], 0.00);
         assert_eq!(bins[14], 1.00);
         assert_eq!(bins[15], 1.25);
-        assert_eq!(bins[16], 1.50);
     }
 
     #[test]
@@ -3458,14 +3643,13 @@ mod tests {
 
     #[test]
     fn axis_bin_value_range_reverses_for_decreasing_sort_order() {
-        let breakpoints = vec![0.0, 1.0, 2.0, 3.0, 4.0];
+        let centers = vec![0.5, 1.5, 2.5, 3.5];
 
         let bottom_range =
-            axis_bin_value_range(0, 4, Some(&breakpoints), 0.0, 4.0, SortOrder::Decreasing);
+            axis_bin_value_range(0, 4, Some(&centers), 0.0, 4.0, SortOrder::Decreasing);
         assert_eq!(bottom_range, (3.0, 4.0));
 
-        let top_range =
-            axis_bin_value_range(3, 4, Some(&breakpoints), 0.0, 4.0, SortOrder::Decreasing);
+        let top_range = axis_bin_value_range(3, 4, Some(&centers), 0.0, 4.0, SortOrder::Decreasing);
         assert_eq!(top_range, (0.0, 1.0));
     }
 

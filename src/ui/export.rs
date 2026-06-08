@@ -9,7 +9,17 @@ use ::image::{Rgba, RgbaImage};
 use crate::analytics;
 use crate::app::SnowLVApp;
 use crate::normalize::normalize_channel_name_with_custom;
-use crate::state::HistogramMode;
+use crate::state::{HistogramMode, SelectedChannel};
+
+struct ExportChannelSeries {
+    name: String,
+    unit: String,
+    color: [u8; 3],
+    points: Vec<(f64, f64)>,
+    min: f64,
+    max: f64,
+    peak: (f64, f64),
+}
 
 /// Helper to push text ops into a Vec<Op>
 fn push_text(ops: &mut Vec<Op>, text: &str, size: f32, x: Mm, y: Mm, font: &PdfFontHandle) {
@@ -86,7 +96,481 @@ fn push_open_line(ops: &mut Vec<Op>, points: &[(f32, f32)]) {
     ops.push(Op::DrawLine { line });
 }
 
+fn selected_channel_display_name(app: &SnowLVApp, selected: &SelectedChannel) -> String {
+    let channel_name = app.get_channel_name(selected.file_index, selected.channel_index);
+    if app.field_normalization {
+        normalize_channel_name_with_custom(&channel_name, Some(&app.custom_normalizations))
+    } else {
+        channel_name
+    }
+}
+
+fn format_export_value(value: f64, unit: &str) -> String {
+    let abs = value.abs();
+    let decimals = if abs >= 100.0 {
+        0
+    } else if abs >= 10.0 {
+        1
+    } else {
+        2
+    };
+
+    if unit.is_empty() {
+        format!("{:.*}", decimals, value)
+    } else {
+        format!("{:.*} {}", decimals, value, unit)
+    }
+}
+
+fn draw_filled_rect(
+    img: &mut RgbaImage,
+    left: u32,
+    top: u32,
+    width: u32,
+    height: u32,
+    color: Rgba<u8>,
+) {
+    let (img_width, img_height) = img.dimensions();
+    let right = left.saturating_add(width).min(img_width);
+    let bottom = top.saturating_add(height).min(img_height);
+    for y in top..bottom {
+        for x in left..right {
+            img.put_pixel(x, y, color);
+        }
+    }
+}
+
+fn draw_filled_circle(img: &mut RgbaImage, cx: i32, cy: i32, radius: i32, color: Rgba<u8>) {
+    let (width, height) = img.dimensions();
+    let r2 = radius * radius;
+    for y in (cy - radius)..=(cy + radius) {
+        for x in (cx - radius)..=(cx + radius) {
+            let dx = x - cx;
+            let dy = y - cy;
+            if dx * dx + dy * dy <= r2 && x >= 0 && y >= 0 && x < width as i32 && y < height as i32
+            {
+                img.put_pixel(x as u32, y as u32, color);
+            }
+        }
+    }
+}
+
+fn blend_pixel(img: &mut RgbaImage, x: u32, y: u32, color: Rgba<u8>) {
+    let (width, height) = img.dimensions();
+    if x >= width || y >= height {
+        return;
+    }
+
+    let alpha = color[3] as f32 / 255.0;
+    if alpha <= 0.0 {
+        return;
+    }
+
+    let base = *img.get_pixel(x, y);
+    let inv_alpha = 1.0 - alpha;
+    img.put_pixel(
+        x,
+        y,
+        Rgba([
+            (color[0] as f32 * alpha + base[0] as f32 * inv_alpha).round() as u8,
+            (color[1] as f32 * alpha + base[1] as f32 * inv_alpha).round() as u8,
+            (color[2] as f32 * alpha + base[2] as f32 * inv_alpha).round() as u8,
+            255,
+        ]),
+    );
+}
+
+fn draw_chart_grid(img: &mut RgbaImage, left: u32, right: u32, top: u32, bottom: u32, opacity: u8) {
+    if opacity == 0 {
+        return;
+    }
+
+    let minor_alpha = ((opacity as u16 * 45) / 100).max(1) as u8;
+    let major_alpha = opacity;
+    let minor_color = Rgba([115, 123, 140, minor_alpha]);
+    let major_color = Rgba([145, 153, 170, major_alpha]);
+    let major_vertical_lines = 16u32;
+    let major_horizontal_lines = 10u32;
+    let minor_per_major = 5u32;
+    let minor_vertical_lines = major_vertical_lines * minor_per_major;
+    let minor_horizontal_lines = major_horizontal_lines * minor_per_major;
+
+    for i in 1..minor_vertical_lines {
+        if i % minor_per_major == 0 {
+            continue;
+        }
+        let x =
+            left + ((right - left) as f32 * i as f32 / minor_vertical_lines as f32).round() as u32;
+        for y in top..bottom {
+            blend_pixel(img, x, y, minor_color);
+        }
+    }
+
+    for i in 1..minor_horizontal_lines {
+        if i % minor_per_major == 0 {
+            continue;
+        }
+        let y =
+            top + ((bottom - top) as f32 * i as f32 / minor_horizontal_lines as f32).round() as u32;
+        for x in left..right {
+            blend_pixel(img, x, y, minor_color);
+        }
+    }
+
+    for i in 1..major_vertical_lines {
+        let x =
+            left + ((right - left) as f32 * i as f32 / major_vertical_lines as f32).round() as u32;
+        for y in top..bottom {
+            blend_pixel(img, x, y, major_color);
+        }
+    }
+
+    for i in 1..major_horizontal_lines {
+        let y =
+            top + ((bottom - top) as f32 * i as f32 / major_horizontal_lines as f32).round() as u32;
+        for x in left..right {
+            blend_pixel(img, x, y, major_color);
+        }
+    }
+}
+
+fn text_width(text: &str, scale: u32) -> u32 {
+    text.chars().count() as u32 * 6 * scale
+}
+
+fn rects_overlap(a: (i32, i32, i32, i32), b: (i32, i32, i32, i32)) -> bool {
+    a.0 < b.2 && a.2 > b.0 && a.1 < b.3 && a.3 > b.1
+}
+
+fn clamp_label_rect(
+    mut label_x: i32,
+    mut label_y: i32,
+    label_width: i32,
+    label_height: i32,
+    bounds: (i32, i32, i32, i32),
+) -> (i32, i32, (i32, i32, i32, i32)) {
+    let (left, top, right, bottom) = bounds;
+    label_x = label_x.clamp(left + 6, right - label_width - 6);
+    label_y = label_y.clamp(top + 5, bottom - label_height - 5);
+
+    (
+        label_x,
+        label_y,
+        (
+            label_x - 6,
+            label_y - 5,
+            label_x + label_width + 6,
+            label_y + label_height + 5,
+        ),
+    )
+}
+
+fn choose_peak_label_position(
+    peak_x: i32,
+    peak_y: i32,
+    label_width: u32,
+    label_height: u32,
+    bounds: (i32, i32, i32, i32),
+    used_rects: &mut Vec<(i32, i32, i32, i32)>,
+) -> (i32, i32) {
+    let label_width = label_width as i32;
+    let label_height = label_height as i32;
+    let mut candidates = Vec::new();
+
+    for distance in [14, 34, 54, 74, 94, 114] {
+        candidates.extend([
+            (peak_x + distance, peak_y - label_height / 2),
+            (peak_x - label_width - distance, peak_y - label_height / 2),
+            (peak_x + distance, peak_y - label_height - 8),
+            (peak_x - label_width - distance, peak_y - label_height - 8),
+            (peak_x + distance, peak_y + 8),
+            (peak_x - label_width - distance, peak_y + 8),
+            (peak_x - label_width / 2, peak_y - label_height - distance),
+            (peak_x - label_width / 2, peak_y + distance),
+        ]);
+    }
+
+    let mut fallback = (peak_x + 18, peak_y - label_height - 12);
+    let mut fallback_rect = (0, 0, 0, 0);
+
+    for (candidate_x, candidate_y) in candidates {
+        let (label_x, label_y, rect) =
+            clamp_label_rect(candidate_x, candidate_y, label_width, label_height, bounds);
+        fallback = (label_x, label_y);
+        fallback_rect = rect;
+
+        if !used_rects.iter().any(|used| rects_overlap(rect, *used)) {
+            used_rects.push(rect);
+            return (label_x, label_y);
+        }
+    }
+
+    used_rects.push(fallback_rect);
+    fallback
+}
+
+fn draw_text(img: &mut RgbaImage, text: &str, x: i32, y: i32, scale: u32, color: Rgba<u8>) {
+    let mut cursor_x = x;
+    for ch in text.chars() {
+        draw_char(img, ch, cursor_x, y, scale, color);
+        cursor_x += (6 * scale) as i32;
+    }
+}
+
+fn draw_text_blended(img: &mut RgbaImage, text: &str, x: i32, y: i32, scale: u32, color: Rgba<u8>) {
+    let mut cursor_x = x;
+    for ch in text.chars() {
+        draw_char_blended(img, ch, cursor_x, y, scale, color);
+        cursor_x += (6 * scale) as i32;
+    }
+}
+
+fn draw_char(img: &mut RgbaImage, ch: char, x: i32, y: i32, scale: u32, color: Rgba<u8>) {
+    let glyph = glyph_rows(ch);
+    let (width, height) = img.dimensions();
+    for (row_idx, row) in glyph.iter().enumerate() {
+        for (col_idx, pixel) in row.as_bytes().iter().enumerate() {
+            if *pixel != b'1' {
+                continue;
+            }
+            let px = x + col_idx as i32 * scale as i32;
+            let py = y + row_idx as i32 * scale as i32;
+            for sy in 0..scale as i32 {
+                for sx in 0..scale as i32 {
+                    let tx = px + sx;
+                    let ty = py + sy;
+                    if tx >= 0 && ty >= 0 && tx < width as i32 && ty < height as i32 {
+                        img.put_pixel(tx as u32, ty as u32, color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn draw_char_blended(img: &mut RgbaImage, ch: char, x: i32, y: i32, scale: u32, color: Rgba<u8>) {
+    let glyph = glyph_rows(ch);
+    let (width, height) = img.dimensions();
+    for (row_idx, row) in glyph.iter().enumerate() {
+        for (col_idx, pixel) in row.as_bytes().iter().enumerate() {
+            if *pixel != b'1' {
+                continue;
+            }
+            let px = x + col_idx as i32 * scale as i32;
+            let py = y + row_idx as i32 * scale as i32;
+            for sy in 0..scale as i32 {
+                for sx in 0..scale as i32 {
+                    let tx = px + sx;
+                    let ty = py + sy;
+                    if tx >= 0 && ty >= 0 && tx < width as i32 && ty < height as i32 {
+                        blend_pixel(img, tx as u32, ty as u32, color);
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn glyph_rows(ch: char) -> [&'static str; 7] {
+    match ch.to_ascii_uppercase() {
+        'A' => [
+            "01110", "10001", "10001", "11111", "10001", "10001", "10001",
+        ],
+        'B' => [
+            "11110", "10001", "10001", "11110", "10001", "10001", "11110",
+        ],
+        'C' => [
+            "01111", "10000", "10000", "10000", "10000", "10000", "01111",
+        ],
+        'D' => [
+            "11110", "10001", "10001", "10001", "10001", "10001", "11110",
+        ],
+        'E' => [
+            "11111", "10000", "10000", "11110", "10000", "10000", "11111",
+        ],
+        'F' => [
+            "11111", "10000", "10000", "11110", "10000", "10000", "10000",
+        ],
+        'G' => [
+            "01111", "10000", "10000", "10111", "10001", "10001", "01111",
+        ],
+        'H' => [
+            "10001", "10001", "10001", "11111", "10001", "10001", "10001",
+        ],
+        'I' => [
+            "11111", "00100", "00100", "00100", "00100", "00100", "11111",
+        ],
+        'J' => [
+            "00111", "00010", "00010", "00010", "10010", "10010", "01100",
+        ],
+        'K' => [
+            "10001", "10010", "10100", "11000", "10100", "10010", "10001",
+        ],
+        'L' => [
+            "10000", "10000", "10000", "10000", "10000", "10000", "11111",
+        ],
+        'M' => [
+            "10001", "11011", "10101", "10101", "10001", "10001", "10001",
+        ],
+        'N' => [
+            "10001", "11001", "10101", "10011", "10001", "10001", "10001",
+        ],
+        'O' => [
+            "01110", "10001", "10001", "10001", "10001", "10001", "01110",
+        ],
+        'P' => [
+            "11110", "10001", "10001", "11110", "10000", "10000", "10000",
+        ],
+        'Q' => [
+            "01110", "10001", "10001", "10001", "10101", "10010", "01101",
+        ],
+        'R' => [
+            "11110", "10001", "10001", "11110", "10100", "10010", "10001",
+        ],
+        'S' => [
+            "01111", "10000", "10000", "01110", "00001", "00001", "11110",
+        ],
+        'T' => [
+            "11111", "00100", "00100", "00100", "00100", "00100", "00100",
+        ],
+        'U' => [
+            "10001", "10001", "10001", "10001", "10001", "10001", "01110",
+        ],
+        'V' => [
+            "10001", "10001", "10001", "10001", "10001", "01010", "00100",
+        ],
+        'W' => [
+            "10001", "10001", "10001", "10101", "10101", "10101", "01010",
+        ],
+        'X' => [
+            "10001", "10001", "01010", "00100", "01010", "10001", "10001",
+        ],
+        'Y' => [
+            "10001", "10001", "01010", "00100", "00100", "00100", "00100",
+        ],
+        'Z' => [
+            "11111", "00001", "00010", "00100", "01000", "10000", "11111",
+        ],
+        '0' => [
+            "01110", "10001", "10011", "10101", "11001", "10001", "01110",
+        ],
+        '1' => [
+            "00100", "01100", "00100", "00100", "00100", "00100", "01110",
+        ],
+        '2' => [
+            "01110", "10001", "00001", "00010", "00100", "01000", "11111",
+        ],
+        '3' => [
+            "11110", "00001", "00001", "01110", "00001", "00001", "11110",
+        ],
+        '4' => [
+            "00010", "00110", "01010", "10010", "11111", "00010", "00010",
+        ],
+        '5' => [
+            "11111", "10000", "10000", "11110", "00001", "00001", "11110",
+        ],
+        '6' => [
+            "01110", "10000", "10000", "11110", "10001", "10001", "01110",
+        ],
+        '7' => [
+            "11111", "00001", "00010", "00100", "01000", "01000", "01000",
+        ],
+        '8' => [
+            "01110", "10001", "10001", "01110", "10001", "10001", "01110",
+        ],
+        '9' => [
+            "01110", "10001", "10001", "01111", "00001", "00001", "01110",
+        ],
+        '.' => [
+            "00000", "00000", "00000", "00000", "00000", "01100", "01100",
+        ],
+        '-' => [
+            "00000", "00000", "00000", "11111", "00000", "00000", "00000",
+        ],
+        '_' => [
+            "00000", "00000", "00000", "00000", "00000", "00000", "11111",
+        ],
+        '/' => [
+            "00001", "00010", "00010", "00100", "01000", "01000", "10000",
+        ],
+        '%' => [
+            "11001", "11010", "00010", "00100", "01000", "01011", "10011",
+        ],
+        ':' => [
+            "00000", "01100", "01100", "00000", "01100", "01100", "00000",
+        ],
+        '(' => [
+            "00010", "00100", "01000", "01000", "01000", "00100", "00010",
+        ],
+        ')' => [
+            "01000", "00100", "00010", "00010", "00010", "00100", "01000",
+        ],
+        ' ' => [
+            "00000", "00000", "00000", "00000", "00000", "00000", "00000",
+        ],
+        _ => [
+            "11111", "10001", "00010", "00100", "00100", "00000", "00100",
+        ],
+    }
+}
+
 impl SnowLVApp {
+    fn collect_export_channel_series(
+        &self,
+        min_time: f64,
+        max_time: f64,
+    ) -> Vec<ExportChannelSeries> {
+        self.get_selected_channels()
+            .iter()
+            .filter(|selected| !selected.hidden)
+            .filter_map(|selected| {
+                let file = self.files.get(selected.file_index)?;
+                let times = file.log.get_times_as_f64();
+                let data = self.get_channel_data(selected.file_index, selected.channel_index);
+                if times.is_empty() || data.is_empty() || times.len() != data.len() {
+                    return None;
+                }
+
+                let source_unit = selected.channel.unit();
+                let mut points = Vec::new();
+                let mut min = f64::INFINITY;
+                let mut max = f64::NEG_INFINITY;
+                let mut peak: Option<(f64, f64)> = None;
+
+                for (&time, &raw_value) in times.iter().zip(data.iter()) {
+                    if time < min_time || time > max_time {
+                        continue;
+                    }
+
+                    let (value, _) = self.unit_preferences.convert_value(raw_value, source_unit);
+                    if !value.is_finite() {
+                        continue;
+                    }
+
+                    min = min.min(value);
+                    max = max.max(value);
+                    if peak.is_none_or(|(_, peak_value)| value > peak_value) {
+                        peak = Some((time, value));
+                    }
+                    points.push((time, value));
+                }
+
+                let peak = peak?;
+                let (_, display_unit) = self.unit_preferences.convert_value(0.0, source_unit);
+
+                Some(ExportChannelSeries {
+                    name: selected_channel_display_name(self, selected),
+                    unit: display_unit.to_string(),
+                    color: self.get_channel_color(selected.color_index),
+                    points,
+                    min,
+                    max,
+                    peak,
+                })
+            })
+            .collect()
+    }
+
     /// Export the current chart view as PNG
     pub fn export_chart_png(&mut self) {
         // Show save dialog
@@ -148,12 +632,22 @@ impl SnowLVApp {
         let chart_left = 80u32;
         let chart_right = width - 40;
         let chart_top = 60u32;
-        let chart_bottom = height - 80;
+        let chart_bottom = height - 115;
 
         for y in chart_top..chart_bottom {
             for x in chart_left..chart_right {
                 imgbuf.put_pixel(x, y, Rgba([40, 40, 40, 255]));
             }
+        }
+        if self.show_grid {
+            draw_chart_grid(
+                &mut imgbuf,
+                chart_left,
+                chart_right,
+                chart_top,
+                chart_bottom,
+                self.grid_opacity,
+            );
         }
 
         // Get time range
@@ -168,54 +662,25 @@ impl SnowLVApp {
 
         let chart_width = (chart_right - chart_left) as f64;
         let chart_height = (chart_bottom - chart_top) as f64;
+        let series = self.collect_export_channel_series(min_time, max_time);
+        let mut peak_label_rects = Vec::new();
 
         // Draw each channel
-        for selected in self.get_selected_channels() {
-            if selected.hidden {
-                continue;
-            }
-
-            let color = self.get_channel_color(selected.color_index);
-            let pixel_color = Rgba([color[0], color[1], color[2], 255]);
-
-            // Get channel data
-            if selected.file_index >= self.files.len() {
-                continue;
-            }
-            let file = &self.files[selected.file_index];
-            let times = file.log.get_times_as_f64();
-            let data = self.get_channel_data(selected.file_index, selected.channel_index);
-
-            if data.is_empty() {
-                continue;
-            }
-
-            // Find min/max for normalization
-            let mut data_min = f64::INFINITY;
-            let mut data_max = f64::NEG_INFINITY;
-            for &val in &data {
-                data_min = data_min.min(val);
-                data_max = data_max.max(val);
-            }
-
-            let data_range = if (data_max - data_min).abs() < 0.0001 {
+        for channel in &series {
+            let pixel_color = Rgba([channel.color[0], channel.color[1], channel.color[2], 255]);
+            let data_range = if (channel.max - channel.min).abs() < 0.0001 {
                 1.0
             } else {
-                data_max - data_min
+                channel.max - channel.min
             };
 
             // Draw data points as lines
             let mut prev_x: Option<u32> = None;
             let mut prev_y: Option<u32> = None;
 
-            for (&time, &value) in times.iter().zip(data.iter()) {
-                // Skip points outside time range
-                if time < min_time || time > max_time {
-                    continue;
-                }
-
+            for &(time, value) in &channel.points {
                 let x_ratio = (time - min_time) / time_span;
-                let y_ratio = (value - data_min) / data_range;
+                let y_ratio = (value - channel.min) / data_range;
 
                 let x = chart_left + (x_ratio * chart_width) as u32;
                 let y = chart_bottom - (y_ratio * chart_height) as u32;
@@ -228,7 +693,102 @@ impl SnowLVApp {
                 prev_x = Some(x);
                 prev_y = Some(y);
             }
+
+            let (peak_time, peak_value) = channel.peak;
+            let peak_x = chart_left + (((peak_time - min_time) / time_span) * chart_width) as u32;
+            let peak_y =
+                chart_bottom - (((peak_value - channel.min) / data_range) * chart_height) as u32;
+            draw_filled_circle(&mut imgbuf, peak_x as i32, peak_y as i32, 6, pixel_color);
+
+            let label = format_export_value(peak_value, &channel.unit);
+            let label_scale = 2;
+            let label_width = text_width(&label, label_scale);
+            let label_height = 7 * label_scale;
+            let (label_x, label_y) = choose_peak_label_position(
+                peak_x as i32,
+                peak_y as i32,
+                label_width,
+                label_height,
+                (
+                    chart_left as i32,
+                    chart_top as i32,
+                    chart_right as i32,
+                    chart_bottom as i32,
+                ),
+                &mut peak_label_rects,
+            );
+            let leader_x = if label_x > peak_x as i32 {
+                label_x - 6
+            } else {
+                label_x + label_width as i32 + 6
+            };
+            let leader_y = label_y + label_height as i32 / 2;
+            draw_line(
+                &mut imgbuf,
+                peak_x,
+                peak_y,
+                leader_x.clamp(chart_left as i32, chart_right as i32) as u32,
+                leader_y.clamp(chart_top as i32, chart_bottom as i32) as u32,
+                pixel_color,
+            );
+            draw_filled_rect(
+                &mut imgbuf,
+                (label_x - 4).max(0) as u32,
+                (label_y - 4).max(0) as u32,
+                label_width + 8,
+                label_height + 8,
+                Rgba([18, 18, 18, 205]),
+            );
+            draw_text(
+                &mut imgbuf,
+                &label,
+                label_x,
+                label_y,
+                label_scale,
+                pixel_color,
+            );
         }
+
+        // Draw bottom key/legend.
+        let legend_top = chart_bottom + 24;
+        let mut legend_x = chart_left;
+        let legend_text_color = Rgba([230, 230, 230, 255]);
+        let legend_scale = 2;
+        for channel in &series {
+            let marker_color = Rgba([channel.color[0], channel.color[1], channel.color[2], 255]);
+            draw_filled_circle(
+                &mut imgbuf,
+                legend_x as i32 + 7,
+                legend_top as i32 + 8,
+                7,
+                marker_color,
+            );
+            let label = channel.name.to_ascii_uppercase();
+            draw_text(
+                &mut imgbuf,
+                &label,
+                legend_x as i32 + 20,
+                legend_top as i32 + 1,
+                legend_scale,
+                legend_text_color,
+            );
+
+            legend_x += text_width(&label, legend_scale) + 42;
+            if legend_x > chart_right.saturating_sub(120) {
+                break;
+            }
+        }
+
+        let watermark = "GENERATED BY SNOWLV";
+        let watermark_width = text_width(watermark, 2);
+        draw_text_blended(
+            &mut imgbuf,
+            watermark,
+            (width - watermark_width - 40) as i32,
+            (height - 34) as i32,
+            2,
+            Rgba([230, 230, 230, 75]),
+        );
 
         // Save the image
         imgbuf.save(path)?;
@@ -265,6 +825,7 @@ impl SnowLVApp {
 
         let chart_width: f64 = chart_right - chart_left;
         let chart_height: f64 = chart_top - chart_bottom;
+        let series = self.collect_export_channel_series(min_time, max_time);
 
         // Draw title
         push_text(
@@ -314,12 +875,8 @@ impl SnowLVApp {
         );
 
         // Draw each channel
-        for selected in self.get_selected_channels() {
-            if selected.hidden {
-                continue;
-            }
-
-            let color_rgb = self.get_channel_color(selected.color_index);
+        for channel in &series {
+            let color_rgb = channel.color;
             let line_color = Color::Rgb(Rgb::new(
                 color_rgb[0] as f32 / 255.0,
                 color_rgb[1] as f32 / 255.0,
@@ -327,50 +884,28 @@ impl SnowLVApp {
                 None,
             ));
 
-            ops.push(Op::SetOutlineColor { col: line_color });
+            ops.push(Op::SetOutlineColor {
+                col: line_color.clone(),
+            });
             ops.push(Op::SetOutlineThickness { pt: Pt(0.75) });
 
-            // Get channel data
-            if selected.file_index >= self.files.len() {
-                continue;
-            }
-            let file = &self.files[selected.file_index];
-            let times = file.log.get_times_as_f64();
-            let data = self.get_channel_data(selected.file_index, selected.channel_index);
-
-            if data.is_empty() {
-                continue;
-            }
-
-            // Find min/max for normalization
-            let mut data_min = f64::INFINITY;
-            let mut data_max = f64::NEG_INFINITY;
-            for &val in &data {
-                data_min = data_min.min(val);
-                data_max = data_max.max(val);
-            }
-
-            let data_range = if (data_max - data_min).abs() < 0.0001 {
+            let data_range = if (channel.max - channel.min).abs() < 0.0001 {
                 1.0
             } else {
-                data_max - data_min
+                channel.max - channel.min
             };
 
             // Build line points (downsample for PDF)
             let mut points: Vec<LinePoint> = Vec::new();
-            let step = (times.len() / 500).max(1); // Max ~500 points per channel
+            let step = (channel.points.len() / 500).max(1); // Max ~500 points per channel
 
-            for (i, (&time, &value)) in times.iter().zip(data.iter()).enumerate() {
+            for (i, &(time, value)) in channel.points.iter().enumerate() {
                 if i % step != 0 {
                     continue;
                 }
 
-                if time < min_time || time > max_time {
-                    continue;
-                }
-
                 let x_ratio = (time - min_time) / time_span;
-                let y_ratio = (value - data_min) / data_range;
+                let y_ratio = (value - channel.min) / data_range;
 
                 let x = chart_left + x_ratio * chart_width;
                 let y = chart_bottom + y_ratio * chart_height;
@@ -388,18 +923,39 @@ impl SnowLVApp {
                 };
                 ops.push(Op::DrawLine { line });
             }
+
+            let (peak_time, peak_value) = channel.peak;
+            let peak_x = chart_left + ((peak_time - min_time) / time_span) * chart_width;
+            let peak_y = chart_bottom + ((peak_value - channel.min) / data_range) * chart_height;
+            ops.push(Op::SetFillColor {
+                col: line_color.clone(),
+            });
+            push_filled_rect(
+                &mut ops,
+                (peak_x - 1.6) as f32,
+                (peak_y - 1.6) as f32,
+                3.2,
+                3.2,
+            );
+            ops.push(Op::SetFillColor {
+                col: Color::Rgb(Rgb::new(0.0, 0.0, 0.0, None)),
+            });
+            push_text(
+                &mut ops,
+                &format_export_value(peak_value, &channel.unit),
+                8.0,
+                Mm((peak_x + 2.5).min(chart_right - 24.0) as f32),
+                Mm((peak_y + 3.0).min(chart_top - 3.0) as f32),
+                &font_bold,
+            );
         }
 
         // Draw legend
         let legend_y = chart_bottom - 12.0;
         let mut legend_x = chart_left;
 
-        for selected in self.get_selected_channels() {
-            if selected.hidden {
-                continue;
-            }
-
-            let color_rgb = self.get_channel_color(selected.color_index);
+        for channel in &series {
+            let color_rgb = channel.color;
             let text_color = Color::Rgb(Rgb::new(
                 color_rgb[0] as f32 / 255.0,
                 color_rgb[1] as f32 / 255.0,
@@ -407,20 +963,16 @@ impl SnowLVApp {
                 None,
             ));
 
-            // Get display name (normalized or original based on setting)
-            let channel_name = selected.channel.name();
-            let display_name = if self.field_normalization {
-                normalize_channel_name_with_custom(&channel_name, Some(&self.custom_normalizations))
-            } else {
-                channel_name
-            };
-
+            ops.push(Op::SetFillColor {
+                col: text_color.clone(),
+            });
+            push_filled_rect(&mut ops, legend_x as f32, (legend_y - 1.0) as f32, 3.0, 3.0);
             ops.push(Op::SetFillColor { col: text_color });
             push_text(
                 &mut ops,
-                &display_name,
+                &channel.name,
                 8.0,
-                Mm(legend_x as f32),
+                Mm((legend_x + 5.0) as f32),
                 Mm(legend_y as f32),
                 &font_regular,
             );

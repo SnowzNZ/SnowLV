@@ -76,6 +76,7 @@ impl SnowLVApp {
 
                 if response.clicked() {
                     self.active_tool = tool;
+                    self.show_settings_view = false;
                     analytics::track_tool_switched(tool.name());
                 }
                 if response.hovered() {

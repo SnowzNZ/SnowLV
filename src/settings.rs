@@ -31,12 +31,22 @@ pub struct UserSettings {
     /// before egui_plot's distance-based fade
     #[serde(default = "default_grid_opacity")]
     pub grid_opacity: u8,
+    /// Default Y-axis scale mode for newly opened tabs. When false, each
+    /// channel is independently normalized to its own range.
+    #[serde(default)]
+    pub default_shared_y_axis: bool,
+    /// When true, Discord Rich Presence is enabled
+    #[serde(default = "default_discord_rpc_enabled")]
+    pub discord_rpc_enabled: bool,
     /// When true, Discord Rich Presence includes the active log file name
     #[serde(default = "default_discord_rpc_show_log_filename")]
     pub discord_rpc_show_log_filename: bool,
     /// Preferred display units for converted chart values
     #[serde(default)]
     pub unit_preferences: UnitPreferences,
+    /// Channel/parameter names to select automatically when a log is opened
+    #[serde(default)]
+    pub default_enabled_parameters: Vec<String>,
 }
 
 fn default_version() -> u32 {
@@ -55,6 +65,10 @@ fn default_grid_opacity() -> u8 {
     255
 }
 
+fn default_discord_rpc_enabled() -> bool {
+    true
+}
+
 fn default_discord_rpc_show_log_filename() -> bool {
     true
 }
@@ -68,8 +82,11 @@ impl Default for UserSettings {
             values_follow_cursor: false,
             show_grid: default_show_grid(),
             grid_opacity: default_grid_opacity(),
+            default_shared_y_axis: false,
+            discord_rpc_enabled: default_discord_rpc_enabled(),
             discord_rpc_show_log_filename: default_discord_rpc_show_log_filename(),
             unit_preferences: UnitPreferences::default(),
+            default_enabled_parameters: Vec::new(),
         }
     }
 }

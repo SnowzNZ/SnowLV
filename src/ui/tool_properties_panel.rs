@@ -35,17 +35,27 @@ impl SnowLVApp {
             let tab = &self.tabs[tab_idx];
             if tab.file_index < self.files.len() {
                 Some((
+                    tab_idx,
                     tab.file_index,
                     tab.channel_search.clone(),
                     tab.selected_channels.len(),
                     tab.stacked_mode,
+                    tab.shared_y_axis,
                 ))
             } else {
                 None
             }
         });
 
-        if let Some((file_index, current_search, selected_count, stacked_mode)) = tab_info {
+        if let Some((
+            tab_idx,
+            file_index,
+            current_search,
+            selected_count,
+            stacked_mode,
+            shared_y_axis,
+        )) = tab_info
+        {
             let channel_count = self.files[file_index].log.channels.len();
 
             // Stacked Mode Toggle Section - Pill Style
@@ -129,6 +139,91 @@ impl SnowLVApp {
                         self.toggle_stacked_mode();
                     }
                     if stacked_btn.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+                });
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(8.0);
+
+            ui.vertical(|ui| {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Y Axis Scale:").size(font_14).strong());
+                });
+                ui.add_space(4.0);
+
+                ui.horizontal(|ui| {
+                    let independent_fill = if !shared_y_axis {
+                        theme.color(theme.selection)
+                    } else {
+                        theme.color(theme.card)
+                    };
+                    let independent_text_color = if !shared_y_axis {
+                        theme.readable_text_color(independent_fill)
+                    } else {
+                        theme.color(theme.muted_text)
+                    };
+                    let independent_stroke = if !shared_y_axis {
+                        egui::Stroke::new(1.5, theme.color(theme.accent))
+                    } else {
+                        egui::Stroke::new(1.0, theme.color(theme.grid))
+                    };
+
+                    let independent_btn = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("Independent")
+                                .size(font_14)
+                                .color(independent_text_color),
+                        )
+                        .fill(independent_fill)
+                        .stroke(independent_stroke)
+                        .corner_radius(egui::CornerRadius::same(16))
+                        .min_size(egui::vec2(112.0, 32.0)),
+                    );
+
+                    if independent_btn.clicked() && shared_y_axis {
+                        self.tabs[tab_idx].shared_y_axis = false;
+                    }
+                    if independent_btn.hovered() {
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    }
+
+                    ui.add_space(4.0);
+
+                    let shared_fill = if shared_y_axis {
+                        theme.color(theme.selection)
+                    } else {
+                        theme.color(theme.card)
+                    };
+                    let shared_text_color = if shared_y_axis {
+                        theme.readable_text_color(shared_fill)
+                    } else {
+                        theme.color(theme.muted_text)
+                    };
+                    let shared_stroke = if shared_y_axis {
+                        egui::Stroke::new(1.5, theme.color(theme.accent))
+                    } else {
+                        egui::Stroke::new(1.0, theme.color(theme.grid))
+                    };
+
+                    let shared_btn = ui.add(
+                        egui::Button::new(
+                            egui::RichText::new("Shared")
+                                .size(font_14)
+                                .color(shared_text_color),
+                        )
+                        .fill(shared_fill)
+                        .stroke(shared_stroke)
+                        .corner_radius(egui::CornerRadius::same(16))
+                        .min_size(egui::vec2(88.0, 32.0)),
+                    );
+
+                    if shared_btn.clicked() && !shared_y_axis {
+                        self.tabs[tab_idx].shared_y_axis = true;
+                    }
+                    if shared_btn.hovered() {
                         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                     }
                 });

@@ -23,15 +23,6 @@ impl SnowLVApp {
                 },
             );
 
-            ui.separator();
-            ui.allocate_ui_with_layout(
-                egui::vec2(310.0, 30.0),
-                egui::Layout::left_to_right(egui::Align::Center),
-                |ui| {
-                    self.render_tool_switcher(ui);
-                },
-            );
-
             if !self.tabs.is_empty() {
                 ui.separator();
                 ui.allocate_ui_with_layout(

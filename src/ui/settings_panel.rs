@@ -33,6 +33,13 @@ impl SnowLVApp {
         ui.separator();
         ui.add_space(8.0);
 
+        // Default parameters
+        self.render_default_parameters_settings(ui);
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(8.0);
+
         // Discord RPC settings
         self.render_discord_rpc_settings(ui);
 
@@ -298,6 +305,96 @@ impl SnowLVApp {
                     }
                 }
             }
+
+            ui.add_space(8.0);
+
+            ui.label(egui::RichText::new(t!("settings.default_y_axis_scale")).size(font_14));
+            ui.horizontal(|ui| {
+                let mut default_shared_y_axis = self.user_settings.default_shared_y_axis;
+                let independent_changed = ui
+                    .selectable_value(
+                        &mut default_shared_y_axis,
+                        false,
+                        t!("settings.y_axis_independent").to_string(),
+                    )
+                    .changed();
+                let shared_changed = ui
+                    .selectable_value(
+                        &mut default_shared_y_axis,
+                        true,
+                        t!("settings.y_axis_shared").to_string(),
+                    )
+                    .changed();
+
+                if independent_changed || shared_changed {
+                    self.user_settings.default_shared_y_axis = default_shared_y_axis;
+                    if let Err(e) = self.user_settings.save() {
+                        self.show_toast_error(&t!("toast.failed_to_save", error = e));
+                    }
+                }
+            });
+            ui.label(
+                egui::RichText::new(t!("settings.default_y_axis_scale_desc"))
+                    .size(font_12)
+                    .color(egui::Color32::GRAY),
+            );
+        });
+    }
+
+    /// Render default parameter settings
+    fn render_default_parameters_settings(&mut self, ui: &mut egui::Ui) {
+        let font_12 = self.scaled_font(12.0);
+        let font_14 = self.scaled_font(14.0);
+
+        egui::CollapsingHeader::new(
+            egui::RichText::new(t!("settings.default_parameters"))
+                .size(font_14)
+                .strong(),
+        )
+        .default_open(true)
+        .show(ui, |ui| {
+            ui.label(
+                egui::RichText::new(t!("settings.default_parameters_desc"))
+                    .size(font_12)
+                    .color(egui::Color32::GRAY),
+            );
+
+            ui.add_space(6.0);
+
+            let response = ui.add(
+                egui::TextEdit::multiline(&mut self.default_enabled_parameters_input)
+                    .desired_rows(5)
+                    .desired_width(f32::INFINITY)
+                    .hint_text(t!("settings.default_parameters_hint")),
+            );
+
+            if response.changed() {
+                self.user_settings.default_enabled_parameters =
+                    parse_default_parameters(&self.default_enabled_parameters_input);
+                if let Err(e) = self.user_settings.save() {
+                    self.show_toast_error(&t!("toast.failed_to_save", error = e));
+                }
+            }
+
+            ui.add_space(4.0);
+
+            ui.horizontal_wrapped(|ui| {
+                if ui.button(t!("settings.save_default_parameters")).clicked() {
+                    self.user_settings.default_enabled_parameters =
+                        parse_default_parameters(&self.default_enabled_parameters_input);
+                    if let Err(e) = self.user_settings.save() {
+                        self.show_toast_error(&t!("toast.failed_to_save", error = e));
+                    }
+                }
+
+                if ui.button(t!("settings.clear_default_parameters")).clicked() {
+                    self.default_enabled_parameters_input.clear();
+                    self.user_settings.default_enabled_parameters.clear();
+                    if let Err(e) = self.user_settings.save() {
+                        self.show_toast_error(&t!("toast.failed_to_save", error = e));
+                    }
+                }
+            });
         });
     }
 
@@ -313,24 +410,47 @@ impl SnowLVApp {
         )
         .default_open(true)
         .show(ui, |ui| {
-            let old_show_log_filename = self.discord_rpc_show_log_filename;
+            let old_enabled = self.discord_rpc_enabled;
             ui.checkbox(
-                &mut self.discord_rpc_show_log_filename,
-                egui::RichText::new(t!("settings.discord_rpc_show_log_filename")).size(font_14),
+                &mut self.discord_rpc_enabled,
+                egui::RichText::new(t!("settings.discord_rpc_enabled")).size(font_14),
             );
             ui.label(
-                egui::RichText::new(t!("settings.discord_rpc_show_log_filename_desc"))
+                egui::RichText::new(t!("settings.discord_rpc_enabled_desc"))
                     .size(font_12)
                     .color(egui::Color32::GRAY),
             );
 
-            if self.discord_rpc_show_log_filename != old_show_log_filename {
-                self.user_settings.discord_rpc_show_log_filename =
-                    self.discord_rpc_show_log_filename;
+            if self.discord_rpc_enabled != old_enabled {
+                self.user_settings.discord_rpc_enabled = self.discord_rpc_enabled;
+                if !self.discord_rpc_enabled {
+                    self.discord_presence.shutdown();
+                }
                 if let Err(e) = self.user_settings.save() {
                     self.show_toast_error(&t!("toast.failed_to_save", error = e));
                 }
             }
+
+            ui.add_enabled_ui(self.discord_rpc_enabled, |ui| {
+                let old_show_log_filename = self.discord_rpc_show_log_filename;
+                ui.checkbox(
+                    &mut self.discord_rpc_show_log_filename,
+                    egui::RichText::new(t!("settings.discord_rpc_show_log_filename")).size(font_14),
+                );
+                ui.label(
+                    egui::RichText::new(t!("settings.discord_rpc_show_log_filename_desc"))
+                        .size(font_12)
+                        .color(egui::Color32::GRAY),
+                );
+
+                if self.discord_rpc_show_log_filename != old_show_log_filename {
+                    self.user_settings.discord_rpc_show_log_filename =
+                        self.discord_rpc_show_log_filename;
+                    if let Err(e) = self.user_settings.save() {
+                        self.show_toast_error(&t!("toast.failed_to_save", error = e));
+                    }
+                }
+            });
         });
     }
 
@@ -673,4 +793,13 @@ impl SnowLVApp {
             }
         });
     }
+}
+
+fn parse_default_parameters(input: &str) -> Vec<String> {
+    input
+        .split(|c| c == '\n' || c == ',' || c == ';')
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(ToOwned::to_owned)
+        .collect()
 }

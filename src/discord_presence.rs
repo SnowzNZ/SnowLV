@@ -12,6 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 /// Set this to SnowLV's Discord Developer Portal application ID for release
 /// builds, or set `SNOWLV_DISCORD_CLIENT_ID` in the environment while testing.
 const DEFAULT_DISCORD_CLIENT_ID: &str = "1511704156736327871";
+const GITHUB_REPOSITORY_URL: &str = "https://github.com/SnowzNZ/SnowLV";
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Default)]
@@ -67,6 +68,10 @@ impl DiscordPresence {
             .activity_type(ActivityType::Playing)
             .details(signature.details.clone())
             .state(signature.state.clone())
+            .buttons(vec![activity::Button::new(
+                "View on GitHub",
+                GITHUB_REPOSITORY_URL,
+            )])
             .timestamps(activity::Timestamps::new().start(self.start_timestamp_ms));
 
         let Some(client) = self.client.as_mut() else {

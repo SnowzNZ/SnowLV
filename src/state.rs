@@ -238,10 +238,10 @@ impl ActiveTool {
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
 pub enum ActivePanel {
     /// Files panel - file management, loading, file list
-    #[default]
     Files,
     /// Tool Properties panel - dynamic panel showing controls for the current tool
     /// (channels for Log Viewer, histogram controls for Histogram, scatter plot controls for Scatter Plot)
+    #[default]
     ToolProperties,
     /// Tools panel - analysis tools, computed channels, export
     Tools,
@@ -443,9 +443,9 @@ impl SampleFilter {
 pub struct PastedTable {
     /// The table data (row-major, y_bin outer, x_bin inner)
     pub data: Vec<Vec<f64>>,
-    /// X-axis breakpoints from the pasted table (optional)
+    /// X-axis centers from the pasted table (optional)
     pub x_breakpoints: Vec<f64>,
-    /// Y-axis breakpoints from the pasted table (optional)
+    /// Y-axis centers from the pasted table (optional)
     pub y_breakpoints: Vec<f64>,
     /// Original dimensions before resampling
     pub original_rows: usize,
@@ -526,9 +526,9 @@ pub struct HistogramConfig {
     pub min_hits_filter: u32,
     /// Custom X axis range. None = auto from data
     pub custom_x_range: Option<(f64, f64)>,
-    /// Custom X bin breakpoints. If set, this overrides auto bin splitting
+    /// Custom X axis cell centers. If set, this overrides auto bin splitting
     pub custom_x_bins: Option<Vec<f64>>,
-    /// Text representation of the custom X bin breakpoint list
+    /// Text representation of the custom X axis center list
     pub custom_x_bins_text: String,
     /// Current edit state for a custom X axis label
     #[serde(skip)]
@@ -540,9 +540,9 @@ pub struct HistogramConfig {
     pub x_sort_order: SortOrder,
     /// Custom Y axis range. None = auto from data
     pub custom_y_range: Option<(f64, f64)>,
-    /// Custom Y bin breakpoints. If set, this overrides auto bin splitting
+    /// Custom Y axis cell centers. If set, this overrides auto bin splitting
     pub custom_y_bins: Option<Vec<f64>>,
-    /// Text representation of the custom Y bin breakpoint list
+    /// Text representation of the custom Y axis center list
     pub custom_y_bins_text: String,
     /// Current edit state for a custom Y axis label
     #[serde(skip)]
@@ -604,8 +604,8 @@ impl HistogramConfig {
     /// Get the effective grid size as (columns, rows)
     /// Returns custom grid if set, otherwise uses the square grid_size enum for both dimensions
     pub fn effective_grid_size(&self) -> (usize, usize) {
-        let cols = if let Some(breakpoints) = self.custom_x_bins.as_ref() {
-            let count = breakpoints.len().saturating_sub(1);
+        let cols = if let Some(centers) = self.custom_x_bins.as_ref() {
+            let count = centers.len();
             if count >= 4 {
                 count.clamp(4, 256)
             } else if self.custom_grid_columns > 0 {
@@ -619,8 +619,8 @@ impl HistogramConfig {
             self.grid_size.size()
         };
 
-        let rows = if let Some(breakpoints) = self.custom_y_bins.as_ref() {
-            let count = breakpoints.len().saturating_sub(1);
+        let rows = if let Some(centers) = self.custom_y_bins.as_ref() {
+            let count = centers.len();
             if count >= 4 {
                 count.clamp(4, 256)
             } else if self.custom_grid_rows > 0 {
@@ -741,6 +741,9 @@ pub struct Tab {
     pub plot_areas: Vec<PlotArea>,
     /// Whether stacked plot mode is enabled
     pub stacked_mode: bool,
+    /// When true, channels with similar magnitudes share left/right Y-axis ranges.
+    /// When false, each channel is independently normalized to its own range.
+    pub shared_y_axis: bool,
     /// Next available plot area ID (for unique identification)
     pub next_plot_area_id: usize,
 }
@@ -774,6 +777,7 @@ impl Tab {
             jump_to_time: None,
             plot_areas: vec![default_plot],
             stacked_mode: false,
+            shared_y_axis: false,
             next_plot_area_id: 1,
         }
     }

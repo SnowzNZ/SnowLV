@@ -1,14 +1,14 @@
 //! Chart rendering and data processing utilities.
 
 use eframe::egui;
-use egui_plot::{Line, Plot, PlotBounds, PlotPoints, VLine};
+use egui_plot::{AxisHints, GridMark, HPlacement, Line, Plot, PlotBounds, PlotPoints, VLine};
 use rust_i18n::t;
 
 use crate::app::SnowLVApp;
 use crate::normalize::normalize_channel_name_with_custom;
 use crate::state::{
     PlotArea, PlotChannelDragPayload, SelectedChannel, COLORBLIND_COLORS, MAX_CHART_POINTS,
-    MIN_PLOT_HEIGHT, PLOT_RESIZE_HANDLE_HEIGHT,
+    MIN_PLOT_HEIGHT, PLOT_AREA_HEADER_HEIGHT, PLOT_RESIZE_HANDLE_HEIGHT,
 };
 
 /// Sensitivity multiplier for scroll-to-zoom (higher = faster zoom per scroll tick).
@@ -23,6 +23,142 @@ const MIN_ZOOM_WINDOW_SECONDS: f64 = 1e-6;
 const STACKED_SHARED_X_BOUNDS_ID: usize = usize::MAX;
 
 type ChartValueItems = Vec<(String, egui::Color32)>;
+
+#[derive(Clone)]
+struct ChartYAxisScale {
+    min: f64,
+    max: f64,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ChartYAxisSide {
+    Left,
+    Right,
+}
+
+#[derive(Clone)]
+struct ChartYAxisAssignment {
+    min: f64,
+    max: f64,
+    source_unit: String,
+}
+
+struct ChartYAxisConfig {
+    scales: Vec<ChartYAxisScale>,
+    assignments: Vec<ChartYAxisAssignment>,
+}
+
+fn format_chart_axis_number(value: f64, step_size: f64) -> String {
+    if !value.is_finite() {
+        return String::new();
+    }
+
+    let value = if value.abs() < 1e-9 { 0.0 } else { value };
+    let step_size = step_size.abs();
+    let decimals = if step_size.is_finite() && step_size > 0.0 {
+        (-step_size.log10().floor() as i32).clamp(0, 4) as usize
+    } else {
+        2
+    };
+
+    let mut text = format!("{:.*}", decimals, value);
+    if text.contains('.') {
+        while text.ends_with('0') {
+            text.pop();
+        }
+        if text.ends_with('.') {
+            text.pop();
+        }
+    }
+    text
+}
+
+fn format_chart_time(seconds: f64) -> String {
+    let total_seconds = seconds.abs();
+    let hours = (total_seconds / 3600.0).floor() as u32;
+    let minutes = ((total_seconds % 3600.0) / 60.0).floor() as u32;
+    let secs = total_seconds % 60.0;
+
+    let sign = if seconds < 0.0 { "-" } else { "" };
+
+    if hours > 0 {
+        format!("{}{}:{:02}:{:06.3}", sign, hours, minutes, secs)
+    } else if minutes > 0 {
+        format!("{}{}:{:06.3}", sign, minutes, secs)
+    } else {
+        format!("{}{:.3}s", sign, secs)
+    }
+}
+
+fn record_rate_time_from_plot_x(plot_x: f64, times: &[f64], rate_hz: f64) -> f64 {
+    if times.is_empty() {
+        return plot_x;
+    }
+
+    let rate_hz = rate_hz.clamp(0.1, 1000.0);
+    let upper = times.partition_point(|&time| time < plot_x);
+    let record_idx = if upper == 0 {
+        0
+    } else if upper >= times.len() {
+        times.len() - 1
+    } else if (times[upper] - plot_x).abs() < (plot_x - times[upper - 1]).abs() {
+        upper
+    } else {
+        upper - 1
+    };
+
+    record_idx as f64 / rate_hz
+}
+
+fn format_chart_y_axis_tick(mark: GridMark, scale: &ChartYAxisScale) -> String {
+    let normalized = mark.value;
+    if !(-f64::EPSILON..=1.0 + f64::EPSILON).contains(&normalized) {
+        return String::new();
+    }
+
+    let range = scale.max - scale.min;
+    if range.abs() < f64::EPSILON {
+        let tolerance = (mark.step_size.abs() * 0.25).max(0.001);
+        if (normalized - 0.5).abs() > tolerance {
+            return String::new();
+        }
+        return format_chart_axis_number(scale.min, 1.0);
+    }
+
+    let value = scale.min + normalized.clamp(0.0, 1.0) * range;
+    format_chart_axis_number(value, mark.step_size * range)
+}
+
+fn chart_y_axis_hints<'a>(scales: &[ChartYAxisScale], show_labels: bool) -> Vec<AxisHints<'a>> {
+    let Some(left) = scales.first().cloned() else {
+        return Vec::new();
+    };
+    let right = scales.get(1).cloned().unwrap_or_else(|| left.clone());
+
+    if !show_labels {
+        return vec![
+            AxisHints::new_y()
+                .placement(HPlacement::Left)
+                .min_thickness(0.0)
+                .formatter(|_, _| String::new()),
+            AxisHints::new_y()
+                .placement(HPlacement::Right)
+                .min_thickness(0.0)
+                .formatter(|_, _| String::new()),
+        ];
+    }
+
+    vec![
+        AxisHints::new_y()
+            .placement(HPlacement::Left)
+            .min_thickness(52.0)
+            .formatter(move |mark, _range| format_chart_y_axis_tick(mark, &left)),
+        AxisHints::new_y()
+            .placement(HPlacement::Right)
+            .min_thickness(52.0)
+            .formatter(move |mark, _range| format_chart_y_axis_tick(mark, &right)),
+    ]
+}
 
 fn chart_scroll_delta_y(ui: &egui::Ui) -> f64 {
     ui.input(|i| {
@@ -184,11 +320,12 @@ fn initial_chart_x_bounds(
 
 fn apply_chart_input_to_bounds(
     ui: &egui::Ui,
+    input_rect: egui::Rect,
     x_bounds: (f64, f64),
     time_range: Option<(f64, f64)>,
     scroll_delta_y: f64,
 ) -> ((f64, f64), bool, bool) {
-    let rect = ui.max_rect();
+    let rect = input_rect;
     let pointer_pos = ui.input(|i| i.pointer.latest_pos());
     let press_origin = ui.input(|i| i.pointer.press_origin());
     let pointer_in_rect = pointer_pos.is_some_and(|pos| rect.contains(pos));
@@ -215,6 +352,9 @@ fn apply_chart_input_to_bounds(
             .unwrap_or((bounds.0 + bounds.1) / 2.0);
 
         if scroll_delta_y.abs() > 0.1 {
+            ui.input_mut(|input| {
+                input.smooth_scroll_delta.y = 0.0;
+            });
             let zoom_factor = (1.0 - scroll_delta_y * SCROLL_ZOOM_SENSITIVITY).clamp(0.8, 1.25);
             let next_bounds = zoom_chart_x_bounds(bounds, time_range, center, zoom_factor);
             zoomed |= next_bounds != bounds;
@@ -291,6 +431,153 @@ impl SnowLVApp {
         }
     }
 
+    fn chart_y_axis_config(
+        &mut self,
+        channels: &[SelectedChannel],
+        shared_y_axis: bool,
+    ) -> ChartYAxisConfig {
+        struct ChannelScaleSeed {
+            min: f64,
+            max: f64,
+            amount: f64,
+            source_unit: String,
+        }
+
+        fn log_distance(a: f64, b: f64) -> f64 {
+            let a = a.abs().max(1e-9).log10();
+            let b = b.abs().max(1e-9).log10();
+            (a - b).abs()
+        }
+
+        let mut seeds: Vec<ChannelScaleSeed> = Vec::new();
+
+        for selected in channels {
+            let Some((min_y, max_y)) =
+                self.get_channel_min_max(selected.file_index, selected.channel_index)
+            else {
+                continue;
+            };
+
+            let source_unit = selected.channel.unit();
+            let (converted_min, _) = self.unit_preferences.convert_value(min_y, source_unit);
+            let (converted_max, _) = self.unit_preferences.convert_value(max_y, source_unit);
+            let min = converted_min.min(converted_max);
+            let max = converted_min.max(converted_max);
+            let amount = min.abs().max(max.abs()).max((max - min).abs()).max(1e-9);
+
+            seeds.push(ChannelScaleSeed {
+                min,
+                max,
+                amount,
+                source_unit: source_unit.to_string(),
+            });
+        }
+
+        if seeds.is_empty() {
+            return ChartYAxisConfig {
+                scales: Vec::new(),
+                assignments: Vec::new(),
+            };
+        }
+
+        let high_idx = seeds
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.amount.total_cmp(&b.amount))
+            .map(|(idx, _)| idx)
+            .unwrap_or(0);
+        let low_idx = seeds
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| a.amount.total_cmp(&b.amount))
+            .map(|(idx, _)| idx)
+            .unwrap_or(high_idx);
+        let high_amount = seeds[high_idx].amount;
+        let low_amount = seeds[low_idx].amount;
+
+        let mut sides = vec![ChartYAxisSide::Left; seeds.len()];
+        if seeds.len() > 1 {
+            sides[low_idx] = ChartYAxisSide::Right;
+            for (idx, seed) in seeds.iter().enumerate() {
+                if idx == high_idx {
+                    sides[idx] = ChartYAxisSide::Left;
+                } else if idx == low_idx {
+                    sides[idx] = ChartYAxisSide::Right;
+                } else if log_distance(seed.amount, high_amount)
+                    <= log_distance(seed.amount, low_amount)
+                {
+                    sides[idx] = ChartYAxisSide::Left;
+                } else {
+                    sides[idx] = ChartYAxisSide::Right;
+                }
+            }
+        }
+
+        let build_scale = |side: ChartYAxisSide, fallback_idx: usize| {
+            let mut side_indices = seeds
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, _)| (sides[idx] == side).then_some(idx));
+            let first_idx = side_indices.next().unwrap_or(fallback_idx);
+            let mut min = seeds[first_idx].min;
+            let mut max = seeds[first_idx].max;
+
+            for idx in side_indices {
+                min = min.min(seeds[idx].min);
+                max = max.max(seeds[idx].max);
+            }
+
+            ChartYAxisScale { min, max }
+        };
+
+        let left_scale = if shared_y_axis {
+            build_scale(ChartYAxisSide::Left, high_idx)
+        } else {
+            ChartYAxisScale {
+                min: seeds[high_idx].min,
+                max: seeds[high_idx].max,
+            }
+        };
+        let right_scale = if shared_y_axis {
+            build_scale(ChartYAxisSide::Right, low_idx)
+        } else {
+            ChartYAxisScale {
+                min: seeds[low_idx].min,
+                max: seeds[low_idx].max,
+            }
+        };
+        let assignments = seeds
+            .iter()
+            .enumerate()
+            .map(|(idx, seed)| {
+                let side = sides[idx];
+                let scale = if shared_y_axis {
+                    if side == ChartYAxisSide::Left {
+                        &left_scale
+                    } else {
+                        &right_scale
+                    }
+                } else {
+                    return ChartYAxisAssignment {
+                        min: seed.min,
+                        max: seed.max,
+                        source_unit: seed.source_unit.clone(),
+                    };
+                };
+                ChartYAxisAssignment {
+                    min: scale.min,
+                    max: scale.max,
+                    source_unit: seed.source_unit.clone(),
+                }
+            })
+            .collect();
+
+        ChartYAxisConfig {
+            scales: vec![left_scale, right_scale],
+            assignments,
+        }
+    }
+
     /// Render single-plot mode chart (original implementation)
     fn render_chart_single_mode(&mut self, ui: &mut egui::Ui) {
         let total_selected = self.get_selected_channels().len();
@@ -324,6 +611,10 @@ impl SnowLVApp {
         let time_range = self.get_time_range();
         let chart_interacted = self.get_chart_interacted();
         let initial_view_seconds = self.initial_view_seconds;
+        let shared_y_axis = self
+            .active_tab
+            .map(|tab_idx| self.tabs[tab_idx].shared_y_axis)
+            .unwrap_or(true);
         let scroll_delta_y = chart_scroll_delta_y(ui);
         let mut viewport = self
             .active_tab
@@ -342,28 +633,14 @@ impl SnowLVApp {
         let mut input_panned = false;
         let mut input_zoomed = false;
         if let Some(bounds) = viewport {
+            let input_rect = ui.available_rect_before_wrap();
             let (next_bounds, panned, zoomed) =
-                apply_chart_input_to_bounds(ui, bounds, time_range, scroll_delta_y);
+                apply_chart_input_to_bounds(ui, input_rect, bounds, time_range, scroll_delta_y);
             viewport = Some(next_bounds);
             input_panned = panned;
             input_zoomed = zoomed;
         }
 
-        // Compute downsampled + normalized data sliced to the current viewport.
-        // Detail scales with zoom level: a 1% viewport gets MAX_CHART_POINTS
-        // over that 1%, not over the whole log.
-        let chart_points: Vec<Option<Vec<[f64; 2]>>> = selected_channels
-            .iter()
-            .map(|selected| {
-                self.compute_viewport_points(selected.file_index, selected.channel_index, viewport)
-            })
-            .collect();
-        let use_normalization = self.field_normalization;
-        let custom_mappings = &self.custom_normalizations;
-
-        // Prepare data for the plot closure (can't borrow self mutably inside)
-        let chart_points = &chart_points;
-        let files = &self.files;
         let color_blind_mode = self.color_blind_mode;
         let theme = self.theme();
         let chart_palette = if color_blind_mode {
@@ -371,6 +648,42 @@ impl SnowLVApp {
         } else {
             theme.chart.as_slice()
         };
+        let y_axis_config = self.chart_y_axis_config(&selected_channels, shared_y_axis);
+        let y_axes = chart_y_axis_hints(&y_axis_config.scales, shared_y_axis);
+
+        // Compute downsampled data sliced to the current viewport, then scale
+        // each channel against its assigned left/right Y axis.
+        let chart_points: Vec<Option<Vec<[f64; 2]>>> = selected_channels
+            .iter()
+            .enumerate()
+            .map(|(idx, selected)| {
+                y_axis_config.assignments.get(idx).and_then(|assignment| {
+                    self.compute_viewport_points(
+                        selected.file_index,
+                        selected.channel_index,
+                        viewport,
+                        assignment,
+                    )
+                })
+            })
+            .collect();
+
+        let use_normalization = self.field_normalization;
+        let custom_mappings = &self.custom_normalizations;
+
+        // Prepare data for the plot closure (can't borrow self mutably inside)
+        let chart_points = &chart_points;
+        let files = &self.files;
+        let x_axis_record_rate = self.active_tab.and_then(|tab_idx| {
+            let tab = &self.tabs[tab_idx];
+            if tab.playback_rate_override {
+                self.files
+                    .get(tab.file_index)
+                    .map(|file| (tab.playback_rate_hz, file.log.get_times_as_f64()))
+            } else {
+                None
+            }
+        });
         let playhead_color = theme.color(theme.playhead);
         let jump_to_time = self.get_jump_to_time();
         let values_follow_cursor = self.values_follow_cursor;
@@ -389,8 +702,16 @@ impl SnowLVApp {
 
         // Build the plot - X-axis drag pans, wheel is handled below as zoom.
         let plot = Plot::new("log_chart")
-            .y_axis_label("") // Hide Y axis label since values are normalized
-            .show_axes([true, false]) // Show X axis (time), hide Y axis (normalized 0-1)
+            .show_axes([true, true])
+            .x_axis_formatter(move |mark, _range| {
+                let seconds = x_axis_record_rate
+                    .map(|(rate_hz, times)| {
+                        record_rate_time_from_plot_x(mark.value, times, rate_hz)
+                    })
+                    .unwrap_or(mark.value);
+                format_chart_time(seconds)
+            })
+            .custom_y_axes(y_axes)
             .legend(egui_plot::Legend::default())
             .show_grid([show_grid, show_grid])
             .grid_color(grid_color)
@@ -699,13 +1020,30 @@ impl SnowLVApp {
 
         // Get available height to constrain scroll area
         let max_scroll_height = ui.available_height();
+        let expanded_plot_count = plot_areas.iter().filter(|plot| !plot.collapsed).count();
+        let last_expanded_plot_idx = plot_areas.iter().rposition(|plot| !plot.collapsed);
+        let fitted_plot_height = if (1..=3).contains(&expanded_plot_count) {
+            let resize_handle_count = plot_areas.len().saturating_sub(1);
+            let x_axis_count = expanded_plot_count.saturating_sub(1) as f32;
+            let reclaimed_x_axis_space = x_axis_count * 18.0;
+            let expanded_chrome = expanded_plot_count as f32 * (PLOT_AREA_HEADER_HEIGHT + 10.0)
+                - reclaimed_x_axis_space;
+            let collapsed_chrome = plot_areas.len().saturating_sub(expanded_plot_count) as f32
+                * (PLOT_AREA_HEADER_HEIGHT + 5.0);
+            let resize_chrome = resize_handle_count as f32 * PLOT_RESIZE_HANDLE_HEIGHT;
+            let available_for_plots =
+                max_scroll_height - expanded_chrome - collapsed_chrome - resize_chrome;
+            Some((available_for_plots / expanded_plot_count as f32).max(MIN_PLOT_HEIGHT))
+        } else {
+            None
+        };
 
         // Wrap in scroll area to allow vertical scrolling when plots don't fit
         egui::ScrollArea::vertical()
             .id_salt("stacked_plots_scroll")
             .max_height(max_scroll_height)
             .auto_shrink([false; 2])
-            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::VisibleWhenNeeded)
             .show(ui, |ui| {
                 // Render each plot area
                 for (plot_idx, plot_area) in plot_areas.iter().enumerate() {
@@ -716,8 +1054,12 @@ impl SnowLVApp {
                         continue;
                     }
 
-                    // Use the plot's own pixel height
-                    let plot_height = plot_area.height_pixels.max(MIN_PLOT_HEIGHT);
+                    // Use the plot's own pixel height, capped so three expanded plots
+                    // fit in the visible chart area without vertical scrolling.
+                    let plot_height = fitted_plot_height
+                        .map(|fit_height| plot_area.height_pixels.min(fit_height))
+                        .unwrap_or(plot_area.height_pixels)
+                        .max(MIN_PLOT_HEIGHT);
 
                     // Render plot area header
                     ui.horizontal(|ui| {
@@ -856,7 +1198,14 @@ impl SnowLVApp {
                         );
                     } else {
                         // Render the plot with drop zone support
-                        self.render_single_plot(ui, &plot_channels, plot_area.id, plot_height);
+                        let show_x_axis = Some(plot_idx) == last_expanded_plot_idx;
+                        self.render_single_plot(
+                            ui,
+                            &plot_channels,
+                            plot_area.id,
+                            plot_height,
+                            show_x_axis,
+                        );
                     }
 
                     ui.add_space(5.0);
@@ -885,6 +1234,7 @@ impl SnowLVApp {
         channels: &[SelectedChannel],
         plot_area_id: usize,
         height: f32,
+        show_x_axis: bool,
     ) {
         let cursor_time = self.get_cursor_time();
         let cursor_tracking = self.cursor_tracking;
@@ -893,6 +1243,10 @@ impl SnowLVApp {
         let time_range = self.get_time_range();
         let chart_interacted = self.get_chart_interacted();
         let initial_view_seconds = self.initial_view_seconds;
+        let shared_y_axis = self
+            .active_tab
+            .map(|tab_idx| self.tabs[tab_idx].shared_y_axis)
+            .unwrap_or(true);
         let scroll_delta_y = chart_scroll_delta_y(ui);
 
         // Compute viewport-aware downsampled + normalized points for this plot area.
@@ -923,23 +1277,15 @@ impl SnowLVApp {
         let mut input_panned = false;
         let mut input_zoomed = false;
         if let Some(bounds) = viewport {
+            let plot_rect = ui.available_rect_before_wrap();
+            let input_rect =
+                egui::Rect::from_min_size(plot_rect.min, egui::vec2(plot_rect.width(), height));
             let (next_bounds, panned, zoomed) =
-                apply_chart_input_to_bounds(ui, bounds, time_range, scroll_delta_y);
+                apply_chart_input_to_bounds(ui, input_rect, bounds, time_range, scroll_delta_y);
             viewport = Some(next_bounds);
             input_panned = panned;
             input_zoomed = zoomed;
         }
-        let chart_points: Vec<Option<Vec<[f64; 2]>>> = channels
-            .iter()
-            .map(|selected| {
-                self.compute_viewport_points(selected.file_index, selected.channel_index, viewport)
-            })
-            .collect();
-        // Prepare data for plot
-        let use_normalization = self.field_normalization;
-        let custom_mappings = &self.custom_normalizations;
-        let chart_points = &chart_points;
-        let files = &self.files;
         let color_blind_mode = self.color_blind_mode;
         let theme = self.theme();
         let chart_palette = if color_blind_mode {
@@ -947,6 +1293,39 @@ impl SnowLVApp {
         } else {
             theme.chart.as_slice()
         };
+        let y_axis_config = self.chart_y_axis_config(channels, shared_y_axis);
+        let y_axes = chart_y_axis_hints(&y_axis_config.scales, shared_y_axis);
+
+        let chart_points: Vec<Option<Vec<[f64; 2]>>> = channels
+            .iter()
+            .enumerate()
+            .map(|(idx, selected)| {
+                y_axis_config.assignments.get(idx).and_then(|assignment| {
+                    self.compute_viewport_points(
+                        selected.file_index,
+                        selected.channel_index,
+                        viewport,
+                        assignment,
+                    )
+                })
+            })
+            .collect();
+
+        // Prepare data for plot
+        let use_normalization = self.field_normalization;
+        let custom_mappings = &self.custom_normalizations;
+        let chart_points = &chart_points;
+        let files = &self.files;
+        let x_axis_record_rate = self.active_tab.and_then(|tab_idx| {
+            let tab = &self.tabs[tab_idx];
+            if tab.playback_rate_override {
+                self.files
+                    .get(tab.file_index)
+                    .map(|file| (tab.playback_rate_hz, file.log.get_times_as_f64()))
+            } else {
+                None
+            }
+        });
         let playhead_color = theme.color(theme.playhead);
         let jump_to_time = self.get_jump_to_time();
         let values_follow_cursor = self.values_follow_cursor;
@@ -967,8 +1346,16 @@ impl SnowLVApp {
             .unwrap_or((0.0, 1.0));
         let plot = Plot::new(format!("plot_{}", plot_area_id))
             .height(height)
-            .y_axis_label("")
-            .show_axes([true, false])
+            .show_axes([show_x_axis, true])
+            .x_axis_formatter(move |mark, _range| {
+                let seconds = x_axis_record_rate
+                    .map(|(rate_hz, times)| {
+                        record_rate_time_from_plot_x(mark.value, times, rate_hz)
+                    })
+                    .unwrap_or(mark.value);
+                format_chart_time(seconds)
+            })
+            .custom_y_axes(y_axes)
             .legend(egui_plot::Legend::default())
             .show_grid([show_grid, show_grid])
             .grid_color(grid_color)
@@ -1378,23 +1765,7 @@ impl SnowLVApp {
 
     /// Format time in seconds to a human-readable string (h:mm:ss.xxx or m:ss.xxx or s.xxx)
     pub fn format_time(seconds: f64) -> String {
-        let total_seconds = seconds.abs();
-        let hours = (total_seconds / 3600.0).floor() as u32;
-        let minutes = ((total_seconds % 3600.0) / 60.0).floor() as u32;
-        let secs = total_seconds % 60.0;
-
-        let sign = if seconds < 0.0 { "-" } else { "" };
-
-        if hours > 0 {
-            // h:mm:ss.xxx format
-            format!("{}{}:{:02}:{:06.3}", sign, hours, minutes, secs)
-        } else if minutes > 0 {
-            // m:ss.xxx format
-            format!("{}{}:{:06.3}", sign, minutes, secs)
-        } else {
-            // s.xxxs format
-            format!("{}{:.3}s", sign, secs)
-        }
+        format_chart_time(seconds)
     }
 
     /// Compute the points to plot for one channel, sliced to the currently
@@ -1407,13 +1778,8 @@ impl SnowLVApp {
         file_index: usize,
         channel_index: usize,
         viewport: Option<(f64, f64)>,
+        y_axis: &ChartYAxisAssignment,
     ) -> Option<Vec<[f64; 2]>> {
-        // Resolve min/max first so the mutable borrow on the cache ends before
-        // we take immutable borrows on the channel data below.
-        let (min_y, max_y) = self
-            .get_channel_min_max(file_index, channel_index)
-            .unwrap_or((0.0, 1.0));
-
         let file = self.files.get(file_index)?;
         let times = file.log.get_times_as_f64();
         let data = self.get_channel_data_ref(file_index, channel_index);
@@ -1477,17 +1843,22 @@ impl SnowLVApp {
             _ => full_lttb(),
         };
 
-        let range = (max_y - min_y).abs();
+        let range = (y_axis.max - y_axis.min).abs();
         // Constant channels (range ≈ 0) get parked at the middle of the
         // overlay strip so they remain visible instead of pinning to the
         // bottom edge — matches the prior `normalize_points` behavior.
         if range < f64::EPSILON {
             return Some(downsampled.into_iter().map(|p| [p[0], 0.5]).collect());
         }
+        let unit_preferences = self.unit_preferences.clone();
+        let source_unit = y_axis.source_unit.clone();
         Some(
             downsampled
                 .into_iter()
-                .map(|p| [p[0], (p[1] - min_y) / range])
+                .map(|p| {
+                    let (value, _) = unit_preferences.convert_value(p[1], &source_unit);
+                    [p[0], (value - y_axis.min) / range]
+                })
                 .collect(),
         )
     }

@@ -7,6 +7,49 @@ use crate::analytics;
 use crate::app::SnowLVApp;
 
 impl SnowLVApp {
+    fn timeline_display_time_for_raw_time(&self, raw_time: f64) -> f64 {
+        let Some(tab_idx) = self.active_tab else {
+            return raw_time;
+        };
+        let tab = &self.tabs[tab_idx];
+        if !tab.playback_rate_override {
+            return raw_time;
+        }
+
+        let Some(file) = self.files.get(tab.file_index) else {
+            return raw_time;
+        };
+        let times = file.log.get_times_as_f64();
+        if times.is_empty() {
+            return raw_time;
+        }
+
+        let upper = times.partition_point(|&time| time < raw_time);
+        let record = if upper == 0 {
+            0
+        } else if upper >= times.len() {
+            times.len() - 1
+        } else if (times[upper] - raw_time).abs() < (raw_time - times[upper - 1]).abs() {
+            upper
+        } else {
+            upper - 1
+        };
+
+        record as f64 / tab.playback_rate_hz.clamp(0.1, 1000.0)
+    }
+
+    fn timeline_display_time_for_record(&self, record: usize) -> Option<f64> {
+        let tab_idx = self.active_tab?;
+        let tab = &self.tabs[tab_idx];
+        if !tab.playback_rate_override {
+            return None;
+        }
+
+        let file = self.files.get(tab.file_index)?;
+        let last_record = file.log.get_times_as_f64().len().saturating_sub(1);
+        Some(record.min(last_record) as f64 / tab.playback_rate_hz.clamp(0.1, 1000.0))
+    }
+
     /// Render the timeline scrubber bar
     pub fn render_timeline_scrubber(&mut self, ui: &mut egui::Ui) {
         // Pre-compute scaled font size
@@ -21,16 +64,19 @@ impl SnowLVApp {
             return;
         }
 
+        let min_time_label = Self::format_time(self.timeline_display_time_for_raw_time(min_time));
+        let max_time_label = Self::format_time(self.timeline_display_time_for_raw_time(max_time));
+
         // Time labels row
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(Self::format_time(min_time))
+                egui::RichText::new(min_time_label)
                     .color(egui::Color32::LIGHT_GRAY)
                     .size(font_12),
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.label(
-                    egui::RichText::new(Self::format_time(max_time))
+                    egui::RichText::new(max_time_label)
                         .color(egui::Color32::LIGHT_GRAY)
                         .size(font_12),
                 );
@@ -163,11 +209,18 @@ impl SnowLVApp {
 
             // Current time display
             if let Some(time) = self.get_cursor_time() {
+                let display_time = self
+                    .get_cursor_record()
+                    .and_then(|record| self.timeline_display_time_for_record(record))
+                    .unwrap_or_else(|| self.timeline_display_time_for_raw_time(time));
                 ui.label(
-                    egui::RichText::new(t!("timeline.time", time = Self::format_time(time)))
-                        .strong()
-                        .color(theme.color(theme.playhead))
-                        .size(font_14),
+                    egui::RichText::new(t!(
+                        "timeline.time",
+                        time = Self::format_time(display_time)
+                    ))
+                    .strong()
+                    .color(egui::Color32::WHITE)
+                    .size(font_14),
                 );
             }
 

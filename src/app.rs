@@ -21,6 +21,7 @@ use crate::discord_presence::{ActivitySignature, DiscordPresence};
 use crate::i18n::Language;
 use crate::ipc::IpcServer;
 use crate::mcp::{start_mcp_server, McpServerHandle, DEFAULT_MCP_PORT};
+use crate::normalize::normalize_channel_name_with_custom;
 use crate::parsers::{
     Aim, BlueDriver, DynamicEfi, EcuMaster, EcuType, Emerald, Haltech, Link, Locomotive,
     MegaSquirt, MotorsportElectronics, Parseable, RomRaider, Speeduino,
@@ -105,6 +106,8 @@ pub struct SnowLVApp {
     pub(crate) unit_preferences: UnitPreferences,
     /// User preference for UI font size scaling
     pub(crate) font_scale: FontScale,
+    /// Editor buffer for the default parameters setting
+    pub(crate) default_enabled_parameters_input: String,
     // === Custom Field Normalization ===
     /// Custom user-defined field name mappings (source name -> normalized name)
     pub(crate) custom_normalizations: HashMap<String, String>,
@@ -121,6 +124,8 @@ pub struct SnowLVApp {
     // === Tool/View Selection ===
     /// Currently active tool/view
     pub(crate) active_tool: ActiveTool,
+    /// Whether the settings page is shown in the main content area.
+    pub(crate) show_settings_view: bool,
     // === Panel Selection ===
     /// Currently active side panel (activity bar selection)
     pub(crate) active_panel: ActivePanel,
@@ -156,6 +161,8 @@ pub struct SnowLVApp {
     pub(crate) user_settings: UserSettings,
     /// Current language selection
     pub(crate) language: Language,
+    /// When true, Discord Rich Presence is enabled.
+    pub(crate) discord_rpc_enabled: bool,
     /// When true, Discord Rich Presence includes the active log file name.
     pub(crate) discord_rpc_show_log_filename: bool,
     /// Current application theme
@@ -171,7 +178,7 @@ pub struct SnowLVApp {
     /// MCP HTTP server handle (embedded server for Claude Desktop connection)
     mcp_server: Option<McpServerHandle>,
     /// Discord Rich Presence client.
-    discord_presence: DiscordPresence,
+    pub(crate) discord_presence: DiscordPresence,
 }
 
 impl Default for SnowLVApp {
@@ -203,6 +210,7 @@ impl Default for SnowLVApp {
             grid_opacity: 255,
             unit_preferences: UnitPreferences::default(),
             font_scale: FontScale::default(),
+            default_enabled_parameters_input: String::new(),
             custom_normalizations: HashMap::new(),
             show_normalization_editor: false,
             norm_editor_extend_source: String::new(),
@@ -210,6 +218,7 @@ impl Default for SnowLVApp {
             norm_editor_custom_source: String::new(),
             norm_editor_custom_target: String::new(),
             active_tool: ActiveTool::default(),
+            show_settings_view: false,
             active_panel: ActivePanel::default(),
             tabs: Vec::new(),
             active_tab: None,
@@ -225,6 +234,7 @@ impl Default for SnowLVApp {
             analysis_selected_category: None,
             user_settings: UserSettings::default(),
             language: Language::default(),
+            discord_rpc_enabled: true,
             discord_rpc_show_log_filename: true,
             theme_id: ThemeId::default().id().to_string(),
             theme_registry: ThemeRegistry::default(),
@@ -288,6 +298,8 @@ impl SnowLVApp {
             show_grid: user_settings.show_grid,
             grid_opacity: user_settings.grid_opacity,
             unit_preferences: user_settings.unit_preferences.clone(),
+            default_enabled_parameters_input: user_settings.default_enabled_parameters.join("\n"),
+            discord_rpc_enabled: user_settings.discord_rpc_enabled,
             discord_rpc_show_log_filename: user_settings.discord_rpc_show_log_filename,
             ..Self::default()
         };
@@ -326,6 +338,11 @@ impl SnowLVApp {
     }
 
     fn update_discord_presence(&mut self) {
+        if !self.discord_rpc_enabled {
+            self.discord_presence.shutdown();
+            return;
+        }
+
         let signature = match &self.loading_state {
             LoadingState::Loading(_) => ActivitySignature::new("Loading ECU log", "Preparing data"),
             LoadingState::Idle => {
@@ -747,6 +764,7 @@ impl SnowLVApp {
 
                         // Create a new tab for this file with its time range
                         let mut tab = Tab::new(file_index, file_name);
+                        tab.shared_y_axis = self.user_settings.default_shared_y_axis;
                         tab.time_range = file_time_range;
                         tab.current_view_window = self.current_view_window;
                         // Initialize cursor to start of file
@@ -756,8 +774,18 @@ impl SnowLVApp {
                         }
                         self.tabs.push(tab);
                         self.active_tab = Some(self.tabs.len() - 1);
+                        let default_count = self.apply_default_enabled_parameters(file_index);
 
-                        self.show_toast_success(&t!("toast.file_loaded"));
+                        if default_count > 0 {
+                            self.show_toast_success(&format!(
+                                "{} ({} default parameter{})",
+                                t!("toast.file_loaded"),
+                                default_count,
+                                if default_count == 1 { "" } else { "s" }
+                            ));
+                        } else {
+                            self.show_toast_success(&t!("toast.file_loaded"));
+                        }
 
                         // Switch to Channels panel so user can select channels
                         self.active_panel = ActivePanel::ToolProperties;
@@ -770,6 +798,111 @@ impl SnowLVApp {
                 self.loading_state = LoadingState::Idle;
             }
         }
+    }
+
+    /// Select configured default parameters for a newly opened log.
+    fn apply_default_enabled_parameters(&mut self, file_index: usize) -> usize {
+        let Some(tab_idx) = self.active_tab else {
+            return 0;
+        };
+
+        if self.tabs[tab_idx].file_index != file_index {
+            return 0;
+        }
+
+        let requested_parameters: Vec<String> = self
+            .user_settings
+            .default_enabled_parameters
+            .iter()
+            .map(|name| name.trim().to_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        if requested_parameters.is_empty() || file_index >= self.files.len() {
+            return 0;
+        }
+
+        let channel_count = self.files[file_index].log.channels.len();
+        let mut added_count = 0;
+
+        for requested in requested_parameters {
+            if self.tabs[tab_idx].selected_channels.len() >= MAX_CHANNELS {
+                break;
+            }
+
+            let Some(channel_index) = (0..channel_count).find(|&idx| {
+                if self.tabs[tab_idx]
+                    .selected_channels
+                    .iter()
+                    .any(|c| c.channel_index == idx)
+                {
+                    return false;
+                }
+
+                let channel_name = self.files[file_index].log.channels[idx].name();
+                if channel_name.trim().eq_ignore_ascii_case(&requested) {
+                    return true;
+                }
+
+                let normalized_name = normalize_channel_name_with_custom(
+                    &channel_name,
+                    Some(&self.custom_normalizations),
+                );
+                normalized_name.trim().eq_ignore_ascii_case(&requested)
+            }) else {
+                continue;
+            };
+
+            self.add_channel_without_notifications(file_index, channel_index);
+            added_count += 1;
+        }
+
+        added_count
+    }
+
+    /// Add a channel to the active tab without toast noise. Used for startup/default selection.
+    fn add_channel_without_notifications(&mut self, file_index: usize, channel_index: usize) {
+        let Some(tab_idx) = self.active_tab else {
+            return;
+        };
+
+        if self.tabs[tab_idx].file_index != file_index
+            || self.tabs[tab_idx].selected_channels.len() >= MAX_CHANNELS
+            || self.tabs[tab_idx]
+                .selected_channels
+                .iter()
+                .any(|c| c.file_index == file_index && c.channel_index == channel_index)
+        {
+            return;
+        }
+
+        let channel = self.files[file_index].log.channels[channel_index].clone();
+        let used_colors: std::collections::HashSet<usize> = self.tabs[tab_idx]
+            .selected_channels
+            .iter()
+            .map(|c| c.color_index)
+            .collect();
+
+        let color_index = (0..self.chart_palette_len())
+            .find(|i| !used_colors.contains(i))
+            .unwrap_or(0);
+
+        self.tabs[tab_idx].selected_channels.push(SelectedChannel {
+            file_index,
+            channel_index,
+            channel,
+            color_index,
+            hidden: false,
+        });
+
+        if !self.tabs[tab_idx].plot_areas.is_empty() {
+            let new_idx = self.tabs[tab_idx].selected_channels.len() - 1;
+            self.tabs[tab_idx].plot_areas[0]
+                .channel_indices
+                .push(new_idx);
+        }
+
+        analytics::track_channel_selected(self.tabs[tab_idx].selected_channels.len());
     }
 
     // ========================================================================
@@ -1488,6 +1621,7 @@ impl SnowLVApp {
             // Create a new tab for this file
             let file_name = self.files[file_index].name.clone();
             let mut tab = Tab::new(file_index, file_name);
+            tab.shared_y_axis = self.user_settings.default_shared_y_axis;
             tab.current_view_window = self.current_view_window;
             self.tabs.push(tab);
             self.active_tab = Some(self.tabs.len() - 1);
@@ -1869,9 +2003,9 @@ impl SnowLVApp {
                 return;
             }
 
-            // ⌘, - Open Settings panel
+            // ⌘, - Open Settings in the main view
             if cmd && i.key_pressed(egui::Key::Comma) {
-                self.active_panel = crate::state::ActivePanel::Settings;
+                self.show_settings_view = true;
                 return;
             }
 
@@ -1894,14 +2028,17 @@ impl SnowLVApp {
             if cmd && !shift {
                 if i.key_pressed(egui::Key::Num1) {
                     self.active_tool = crate::state::ActiveTool::LogViewer;
+                    self.show_settings_view = false;
                     return;
                 }
                 if i.key_pressed(egui::Key::Num2) {
                     self.active_tool = crate::state::ActiveTool::ScatterPlot;
+                    self.show_settings_view = false;
                     return;
                 }
                 if i.key_pressed(egui::Key::Num3) {
                     self.active_tool = crate::state::ActiveTool::Histogram;
+                    self.show_settings_view = false;
                     return;
                 }
             }
@@ -1914,10 +2051,6 @@ impl SnowLVApp {
                 }
                 if i.key_pressed(egui::Key::C) {
                     self.active_panel = crate::state::ActivePanel::ToolProperties;
-                    return;
-                }
-                if i.key_pressed(egui::Key::T) {
-                    self.active_panel = crate::state::ActivePanel::Tools;
                     return;
                 }
             }
@@ -2146,8 +2279,9 @@ impl eframe::App for SnowLVApp {
             });
 
         // Bottom panel for timeline scrubber (visible in LogViewer and Histogram modes)
-        let show_timeline =
-            self.get_time_range().is_some() && self.active_tool != ActiveTool::ScatterPlot;
+        let show_timeline = !self.show_settings_view
+            && self.get_time_range().is_some()
+            && self.active_tool != ActiveTool::ScatterPlot;
 
         if show_timeline {
             egui::Panel::bottom("timeline_panel")
@@ -2164,6 +2298,20 @@ impl eframe::App for SnowLVApp {
 
         // Main content area - render based on active tool
         egui::CentralPanel::default().show_inside(ui, |ui| {
+            if self.show_settings_view {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.add_space(6.0);
+                        ui.heading("Settings");
+                        ui.add_space(8.0);
+                        ui.separator();
+                        ui.add_space(8.0);
+                        self.render_settings_panel_content(ui);
+                    });
+                return;
+            }
+
             match self.active_tool {
                 ActiveTool::LogViewer => {
                     ui.add_space(6.0);

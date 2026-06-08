@@ -66,7 +66,18 @@ settings:
   show_grid: "Show Grid"
   show_grid_desc: "Draw the chart background grid"
   grid_opacity: "Opacity:"
+  default_y_axis_scale: "Default Y Axis Scale:"
+  default_y_axis_scale_desc: "Used for newly opened tabs; existing tabs can still be changed from the tool properties panel"
+  y_axis_independent: "Independent"
+  y_axis_shared: "Shared"
+  default_parameters: "Default Parameters"
+  default_parameters_desc: "Select these channel names automatically when opening a log. Matches raw and normalized channel names."
+  default_parameters_hint: "RPM\nMAP\nTPS\nAFR"
+  save_default_parameters: "Save"
+  clear_default_parameters: "Clear"
   discord_rpc: "Discord RPC"
+  discord_rpc_enabled: "Enable Discord RPC"
+  discord_rpc_enabled_desc: "Show SnowLV activity in Discord Rich Presence"
   discord_rpc_show_log_filename: "Show Log File Name"
   discord_rpc_show_log_filename_desc: "Include the active log file name in Discord Rich Presence"
   field_names: "Field Names"
@@ -97,7 +108,7 @@ settings:
 # Timeline (src/ui/timeline.rs)
 timeline:
   speed: "Speed:"
-  logger_rate: "Logger FPS/Hz"
+  logger_rate: "Logging Rate:"
   time: "Time: %{time}"
   record: "Record %{current} of %{total}"
 

@@ -685,6 +685,7 @@ impl SnowLVApp {
 
         // Switch to scatter plot view
         self.active_tool = ActiveTool::ScatterPlot;
+        self.show_settings_view = false;
 
         // Configure the scatter plot (now we can get mutable borrow)
         if let Some(state) = self.get_scatter_plot_state_mut() {
@@ -699,6 +700,7 @@ impl SnowLVApp {
 
     fn handle_show_chart(&mut self) -> IpcResponse {
         self.active_tool = ActiveTool::LogViewer;
+        self.show_settings_view = false;
         IpcResponse::ok()
     }
 
